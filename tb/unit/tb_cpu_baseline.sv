@@ -111,9 +111,16 @@ module tb_cpu_baseline;
         end
     endtask
 
-    wire m_data_write;
-    wire [31:0] m_instr_addr, m_data_addr, m_data_out;
-    reg [31:0] m_instr_in, m_data_in;
+    wire m_data_req_valid;
+    wire m_data_req_ready;
+    wire m_data_req_write;
+    wire [31:0] m_instr_addr;
+    wire [31:0] m_data_req_addr;
+    wire [31:0] m_data_req_wdata;
+    reg [31:0] m_instr_in;
+    reg m_data_rsp_valid;
+    reg [31:0] m_data_rsp_rdata;
+    wire m_data_rsp_error;
 
     always @(m_instr_addr) begin
         m_instr_in = instructions[m_instr_addr];
@@ -121,56 +128,76 @@ module tb_cpu_baseline;
 
     reg [31:0] output_store[10];
 
-    always @(m_data_addr)
-        case (m_data_addr)
-            'h00004000: m_data_in = 10;
-            'h00004001: m_data_in = 11;
+    assign m_data_req_ready = 1'b1;
+    assign m_data_rsp_error = 1'b0;
 
-            'h00004019: m_data_in = output_store[0];
-            'h0000401a: m_data_in = output_store[1];
-            'h0000401b: m_data_in = output_store[2];
-            'h0000401c: m_data_in = output_store[3];
-            'h0000401d: m_data_in = output_store[4];
-            'h0000401e: m_data_in = output_store[5];
-            'h0000401f: m_data_in = output_store[6];
-            'h00004020: m_data_in = output_store[7];
-            'h00004021: m_data_in = output_store[8];
-            'h00004022: m_data_in = output_store[9];
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            m_data_rsp_valid <= 1'b0;
+            m_data_rsp_rdata <= 32'b0;
+        end else begin
+            m_data_rsp_valid <= 1'b0;
 
-            default: begin
-                $display("WARNING: Invalid address to read : %x", m_data_addr << 2);
-                m_data_in = 0;
-            end
-        endcase
+            if (m_data_req_valid && m_data_req_ready) begin
+                m_data_rsp_valid <= 1'b1;
 
-    always @(posedge clk)
-        if (m_data_write) begin
-            case (m_data_addr)
-                'h00004019: output_store[0] = m_data_out;
-                'h0000401a: output_store[1] = m_data_out;
-                'h0000401b: output_store[2] = m_data_out;
-                'h0000401c: output_store[3] = m_data_out;
-                'h0000401d: output_store[4] = m_data_out;
-                'h0000401e: output_store[5] = m_data_out;
-                'h0000401f: output_store[6] = m_data_out;
-                'h00004020: output_store[7] = m_data_out;
-                'h00004021: output_store[8] = m_data_out;
-                'h00004022: output_store[9] = m_data_out;
-                default: begin
-                    $display("WARNING: Invalid address to write : %x", m_data_addr << 2);
+                if (m_data_req_write) begin
+                    m_data_rsp_rdata <= 32'b0;
+                    case (m_data_req_addr)
+                        32'h0001_0064: output_store[0] <= m_data_req_wdata;
+                        32'h0001_0068: output_store[1] <= m_data_req_wdata;
+                        32'h0001_006c: output_store[2] <= m_data_req_wdata;
+                        32'h0001_0070: output_store[3] <= m_data_req_wdata;
+                        32'h0001_0074: output_store[4] <= m_data_req_wdata;
+                        32'h0001_0078: output_store[5] <= m_data_req_wdata;
+                        32'h0001_007c: output_store[6] <= m_data_req_wdata;
+                        32'h0001_0080: output_store[7] <= m_data_req_wdata;
+                        32'h0001_0084: output_store[8] <= m_data_req_wdata;
+                        32'h0001_0088: output_store[9] <= m_data_req_wdata;
+                        default:
+                            $display("WARNING: Invalid address to write : %x",
+                                     m_data_req_addr);
+                    endcase
+                end else begin
+                    case (m_data_req_addr)
+                        32'h0001_0000: m_data_rsp_rdata <= 32'd10;
+                        32'h0001_0004: m_data_rsp_rdata <= 32'd11;
+
+                        32'h0001_0064: m_data_rsp_rdata <= output_store[0];
+                        32'h0001_0068: m_data_rsp_rdata <= output_store[1];
+                        32'h0001_006c: m_data_rsp_rdata <= output_store[2];
+                        32'h0001_0070: m_data_rsp_rdata <= output_store[3];
+                        32'h0001_0074: m_data_rsp_rdata <= output_store[4];
+                        32'h0001_0078: m_data_rsp_rdata <= output_store[5];
+                        32'h0001_007c: m_data_rsp_rdata <= output_store[6];
+                        32'h0001_0080: m_data_rsp_rdata <= output_store[7];
+                        32'h0001_0084: m_data_rsp_rdata <= output_store[8];
+                        32'h0001_0088: m_data_rsp_rdata <= output_store[9];
+
+                        default: begin
+                            $display("WARNING: Invalid address to read : %x",
+                                     m_data_req_addr);
+                            m_data_rsp_rdata <= 32'b0;
+                        end
+                    endcase
                 end
-            endcase
+            end
         end
+    end
 
     cpu_core dut (
         .Clk(clk),
         .Rst(rst),
         .InstrIn(m_instr_in),
         .InstrAddr(m_instr_addr),
-        .DataIn(m_data_in),
-        .DataOut(m_data_out),
-        .DataWrite(m_data_write),
-        .DataAddr(m_data_addr),
+        .data_req_valid(m_data_req_valid),
+        .data_req_ready(m_data_req_ready),
+        .data_req_addr(m_data_req_addr),
+        .data_req_write(m_data_req_write),
+        .data_req_wdata(m_data_req_wdata),
+        .data_rsp_valid(m_data_rsp_valid),
+        .data_rsp_rdata(m_data_rsp_rdata),
+        .data_rsp_error(m_data_rsp_error),
 
         .R0 (R[0]),
         .R1 (R[1]),

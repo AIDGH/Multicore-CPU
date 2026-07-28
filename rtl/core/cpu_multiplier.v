@@ -9,6 +9,9 @@ module cpu_multiplier (
     output reg        busy,
     output reg        done
 );
+    timeunit 1ns;
+    timeprecision 1ps;
+
     reg [31:0] product, acc, mlt;
     reg [5:0]  count;
 

@@ -47,8 +47,33 @@ run_interfaces() {
     vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
 }
 
+run_cpu_memory_handshake() {
+    local test_name="cpu_memory_handshake"
+    local build_dir="${repo_root}/build/${test_name}"
+    local simulation="${build_dir}/tb_cpu_memory_handshake.vvp"
+
+    mkdir -p "${build_dir}"
+
+    iverilog -g2012 -Wall \
+        -s tb_cpu_memory_handshake \
+        -o "${simulation}" \
+        "${repo_root}/rtl/common/mc_defs.svh" \
+        "${repo_root}/rtl/core/cpu_alu.v" \
+        "${repo_root}/rtl/core/cpu_control.v" \
+        "${repo_root}/rtl/core/cpu_reg_file.v" \
+        "${repo_root}/rtl/core/cpu_multiplier.v" \
+        "${repo_root}/rtl/core/cpu_divider.v" \
+        "${repo_root}/rtl/core/cpu_mul_div.v" \
+        "${repo_root}/rtl/core/cpu_core.v" \
+        "${repo_root}/tb/mocks/mock_l1.sv" \
+        "${repo_root}/tb/unit/tb_cpu_memory_handshake.sv" \
+        2>&1 | tee "${build_dir}/compile.log"
+
+    vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
+}
+
 usage() {
-    echo "Usage: $0 {cpu_baseline|interfaces|all}" >&2
+    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|all}" >&2
 }
 
 case "${1:-}" in
@@ -58,9 +83,13 @@ case "${1:-}" in
     interfaces)
         run_interfaces
         ;;
+    cpu_memory_handshake)
+        run_cpu_memory_handshake
+        ;;
     all)
         run_cpu_baseline
         run_interfaces
+        run_cpu_memory_handshake
         ;;
     *)
         usage

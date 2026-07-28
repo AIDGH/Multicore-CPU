@@ -10,6 +10,9 @@ module cpu_alu (
     output reg [31:0] y,
     output            zero
 );
+    timeunit 1ns;
+    timeprecision 1ps;
+
     always @(*) begin
         case (op)
             2'b00: y = a + b;
