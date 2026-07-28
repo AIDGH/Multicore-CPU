@@ -46,13 +46,25 @@ The accepted production boundary consists of:
 These modules currently pass the accepted regression suite and form the
 regression-protected infrastructure boundary. They must not be redesigned to
 accommodate a preferred cache or atomic implementation. A change is permitted
-only when a demonstrated interface defect blocks the assigned cache or atomic
-integration. Every such change must:
+only when either:
+
+1. a demonstrated interface defect blocks the assigned cache or atomic
+   integration; or
+2. a clearly demonstrated missing behavior required by
+   `project_1_exact_text.md` cannot be completed without a minimal
+   infrastructure change.
+
+Every such change must:
 
 1. be explained in its pull request;
-2. include a self-checking regression that reproduces the problem;
+2. include a self-checking regression that reproduces the defect or missing
+   required behavior;
 3. preserve every existing regression;
-4. receive team review before merge.
+4. receive team review before merge;
+5. remain as small as possible.
+
+This exception does not permit Arad or Shahab to freely redesign Ehsan's
+accepted infrastructure.
 
 Minimal CPU changes demonstrably required to implement Shahab's assigned ISA
 features follow the same rule: preserve baseline behavior, justify each
@@ -101,8 +113,8 @@ Arad retains the original cache/coherence scope and owns:
 - cache, MESI, and snoop-related full-system debugging.
 
 Arad must connect to the accepted boundaries below. Changes to Ehsan's bus,
-memory, arbiter, or interconnect require the defect/regression/review process
-defined above.
+memory, arbiter, or interconnect require one of the two demonstrated conditions
+and the regression/review safeguards defined above.
 
 ### Shahab: ISA, atomics, reservations, and architectural validation
 
@@ -124,7 +136,7 @@ Shahab retains the original ISA/atomic/testing scope and owns:
 
 Shahab must integrate these features with the accepted CPU/cache contracts.
 Changes to Ehsan's bus, memory, arbiter, or interconnect require the same
-defect/regression/review process.
+demonstration, minimal-change, regression, and review process.
 
 ### Arad and Shahab jointly: remaining project finalization
 
