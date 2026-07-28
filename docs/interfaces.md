@@ -56,75 +56,88 @@ multicore extensions remain deferred.
 
 ## L1 cache to shared bus
 
+The bus has two explicit requester endpoints. Bit 0 identifies requester/core 0
+and bit 1 identifies requester/core 1.
+
 ### Cache-owned request signals
 
-- `bus_request_valid`
-- `bus_transaction`: `BusRd`, `BusRdX`, or dirty write-back/flush
-- `bus_requester_id`
-- `bus_line_address`: 32-bit byte address with bits `[3:0]` equal to zero
-- `bus_writeback_data`: 128-bit dirty line for write-back/flush
+- `l1_req_valid[1:0]`
+- `l1_req_txn_0`, `l1_req_txn_1`: `MC_BUS_RD`, `MC_BUS_RDX`, or
+  `MC_BUS_WRITEBACK`
+- `l1_req_line_addr_0`, `l1_req_line_addr_1`: aligned 32-bit byte addresses
+- `l1_req_wdata_0`, `l1_req_wdata_1`: 128-bit write-back lines
 
-### Bus-owned requester response signals
+### Bus-owned request and response signals
 
-- `bus_request_ready` or grant: accepts one cache request
-- `bus_transaction_complete`: final completion for the current owner
-- `bus_response_data`: returned 128-bit line
-- `bus_response_shared`: indicates that another cache reported a copy
+- `l1_req_ready[1:0]`: one-hot acceptance indication for the selected request
+- `l1_rsp_valid[1:0]`: one-cycle final response, asserted only for the owner
+- `l1_rsp_data_0`, `l1_rsp_data_1`: downstream 128-bit response data
+- `l1_rsp_shared[1:0]`: the snooped peer reported that it holds the line
+- `l1_rsp_error[1:0]`: downstream error or unsupported dirty-peer response
 
-### Bus-owned snoop broadcast
+### Bus-owned snoop signals
 
-- `snoop_valid`
-- `snoop_transaction`
+- `snoop_valid[1:0]`: asserted only toward the nonowner
+- `snoop_txn`
+- `snoop_line_addr`
 - `snoop_requester_id`
-- `snoop_line_address`
 
-### Snooping-cache response
+### Snooping-cache response signals
 
-- `snoop_response_valid`: the snoop response is complete
-- `snoop_present`: the cache holds the line in a valid state
-- `snoop_dirty`: the cache owns newer dirty data
-- `snoop_data_valid`
-- `snoop_data`: 128-bit dirty-data response
+- `snoop_rsp_valid[1:0]`: acknowledgement from the selected nonowner
+- `snoop_rsp_present[1:0]`
+- `snoop_rsp_dirty[1:0]`
+- `snoop_rsp_data_valid[1:0]`
+- `snoop_rsp_data_0`, `snoop_rsp_data_1`
 
 ### Protocol
 
-1. The bus accepts only one coherence transaction at a time.
-2. Arbitration selects one requesting cache as transaction owner.
-3. Ownership remains with that cache until snoop handling, any dirty-data
-   transfer or write-back, memory activity, and the final requester response
-   all complete.
-4. The nonowner cache receives the snoop broadcast and must complete its
-   response even when it does not hold the requested line.
-5. Dirty peer data takes precedence over stale main-memory data.
-6. The bus reports whether another cache had a copy so a requesting cache can
-   later distinguish exclusive from shared ownership.
-
-These signals describe transport and ownership only. MESI transition policy is
-not defined or implemented here.
+1. The existing round-robin arbiter selects one owner. The bus captures that
+   request once and retains ownership through final completion.
+2. Request withdrawal after capture does not cancel or transfer the
+   transaction.
+3. The bus issues a snoop only to the nonowner and waits for
+   `snoop_rsp_valid` before accessing downstream memory.
+4. After a clean-peer acknowledgement, the bus issues one downstream request,
+   holds all request fields stable until acceptance, and then waits for the
+   downstream completion response.
+5. The bus returns one response only to the original owner. The shared bit is
+   the captured peer `snoop_rsp_present` value.
+6. A dirty-peer report is not yet serviced by cache-to-cache intervention.
+   The bus suppresses the downstream request and returns one owner-only error
+   response with zero data. This prevents stale memory data from being
+   returned silently.
+7. `MC_BUS_RDX` snoop acknowledgement represents completion of the peer-side
+   invalidation action. The L1 cache remains responsible for all MESI state
+   transitions.
 
 ## Shared bus to main memory
 
 ### Bus-owned request signals
 
-- `memory_request_valid`
-- `memory_request_op`: line read or line write
-- `memory_line_address`: aligned 32-bit byte address
-- `memory_write_data`: 128-bit line
+- `memory_req_valid`
+- `memory_req_op`: `MC_LINE_READ` or `MC_LINE_WRITE`
+- `memory_req_line_addr`: aligned 32-bit byte address
+- `memory_req_wdata`: 128-bit line
 
 ### Memory-owned signals
 
-- `memory_request_ready`
-- `memory_response_valid`
-- `memory_read_data`: 128-bit line
+- `memory_req_ready`
+- `memory_rsp_valid`
+- `memory_rsp_rdata`: 128-bit line
+- `memory_rsp_error`
 
 ### Protocol
 
-1. Acceptance occurs on `memory_request_valid && memory_request_ready`.
+1. Acceptance occurs on `memory_req_valid && memory_req_ready`.
 2. Request fields remain stable until acceptance.
 3. The bus permits only one outstanding shared-memory transaction.
 4. Memory may apply arbitrary acceptance and completion latency.
-5. `memory_response_valid` indicates final read or write completion.
-6. A write may ignore `memory_read_data`; a read returns the requested line.
+5. `memory_rsp_valid` indicates final read or write completion.
+6. `MC_BUS_RD` and `MC_BUS_RDX` produce line reads.
+   `MC_BUS_WRITEBACK` produces a line write using the captured requester data.
+7. The downstream data and error indication are routed only to the transaction
+   owner.
 
 ## Coherence to reservation logic
 
