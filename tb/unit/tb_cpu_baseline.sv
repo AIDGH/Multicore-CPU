@@ -1,4 +1,6 @@
 module tb_cpu_baseline;
+    timeunit 1ns;
+    timeprecision 1ps;
 
     reg clk, rst, Jen;
     reg [31:0] instructions[512];
