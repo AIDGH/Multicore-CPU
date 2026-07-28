@@ -146,8 +146,29 @@ run_bus_memory() {
     vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
 }
 
+run_multicore_interconnect_top() {
+    local test_name="multicore_interconnect_top"
+    local build_dir="${repo_root}/build/${test_name}"
+    local simulation="${build_dir}/tb_multicore_interconnect_top.vvp"
+
+    mkdir -p "${build_dir}"
+
+    iverilog -g2012 -Wall \
+        -s tb_multicore_interconnect_top \
+        -o "${simulation}" \
+        "${repo_root}/rtl/common/mc_defs.svh" \
+        "${repo_root}/rtl/bus/rr_arbiter.sv" \
+        "${repo_root}/rtl/bus/shared_bus.sv" \
+        "${repo_root}/rtl/memory/shared_memory.sv" \
+        "${repo_root}/rtl/top/multicore_interconnect_top.sv" \
+        "${repo_root}/tb/integration/tb_multicore_interconnect_top.sv" \
+        2>&1 | tee "${build_dir}/compile.log"
+
+    vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
+}
+
 usage() {
-    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|rr_arbiter|shared_bus|shared_memory|bus_memory|all}" >&2
+    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|rr_arbiter|shared_bus|shared_memory|bus_memory|multicore_interconnect_top|all}" >&2
 }
 
 case "${1:-}" in
@@ -172,6 +193,9 @@ case "${1:-}" in
     bus_memory)
         run_bus_memory
         ;;
+    multicore_interconnect_top)
+        run_multicore_interconnect_top
+        ;;
     all)
         run_cpu_baseline
         run_interfaces
@@ -180,6 +204,7 @@ case "${1:-}" in
         run_shared_bus
         run_shared_memory
         run_bus_memory
+        run_multicore_interconnect_top
         ;;
     *)
         usage

@@ -167,6 +167,39 @@ unwritten contents are unspecified.
 The active integration path is `shared_bus` (including `rr_arbiter`) directly
 to `shared_memory` through the signals listed above.
 
+## Structural multicore interconnect top-level
+
+`multicore_interconnect_top` is the active structural shell around one
+`shared_bus` and one `shared_memory`. The round-robin arbiter remains internal
+to `shared_bus`; the shell adds no arbitration, coherence, or memory policy.
+
+The external cache 0 endpoint uses the `cache0_*` signals, and the external
+cache 1 endpoint uses the matching `cache1_*` signals. Each endpoint contains:
+
+- request inputs: `req_valid`, `req_txn`, `req_line_addr`, and `req_wdata`
+- the `req_ready` acceptance output
+- response outputs: `rsp_valid`, `rsp_data`, `rsp_shared`, and `rsp_error`
+- snoop outputs: `snoop_valid`, `snoop_txn`, `snoop_line_addr`, and
+  `snoop_requester_id`
+- snoop-response inputs: `snoop_rsp_valid`, `snoop_rsp_present`,
+  `snoop_rsp_dirty`, `snoop_rsp_data_valid`, and `snoop_rsp_data`
+
+The suffixes above follow either the `cache0_` or `cache1_` prefix exactly.
+Endpoint 0 connects only to bus requester/snoop position 0, and endpoint 1
+connects only to position 1. The complete bus-to-memory request and response
+interface is internal to the shell and directly connects the sole
+`shared_bus` instance to the sole `shared_memory` instance.
+
+The `MEMORY_LINE_COUNT` and `MEMORY_RESPONSE_LATENCY` top-level parameters
+pass through to `shared_memory.LINE_COUNT` and
+`shared_memory.RESPONSE_LATENCY`. Their defaults are 256 lines and two cycles,
+matching the memory defaults. The active-high `rst` input is passed directly
+to both the bus and memory.
+
+Production CPU and private-L1 cache instances remain deferred. The future real
+L1 caches, rather than this structural shell, own MESI state and coherence
+policy.
+
 ## Coherence to reservation logic
 
 Each core owns one reservation record containing:
