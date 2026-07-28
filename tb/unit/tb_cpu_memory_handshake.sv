@@ -70,9 +70,9 @@ module tb_cpu_memory_handshake;
         end
     endtask
 
-    always @* begin
-        instr_in = instructions[instr_addr[3:0]];
+    assign instr_in = instructions[instr_addr[3:0]];
 
+    always @* begin
         if (data_req_write)
             l1_request_op = MC_MEM_STORE;
         else
