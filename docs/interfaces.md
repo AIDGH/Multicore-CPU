@@ -139,6 +139,34 @@ and bit 1 identifies requester/core 1.
 7. The downstream data and error indication are routed only to the transaction
    owner.
 
+### Active shared-memory endpoint
+
+`shared_memory` implements this interface with a synthesizable array of
+128-bit lines. Its parameters are:
+
+- `LINE_COUNT`: number of stored lines; default 256 (4096 bytes)
+- `RESPONSE_LATENCY`: cycles from acceptance to completion; default 2 and
+  constrained internally to at least one cycle
+
+The byte address is interpreted as `{line_number, 4'b0000}`. Bits `[31:4]`
+form a zero-extended 32-bit line number for the bounds comparison, and the
+low `$clog2(LINE_COUNT)` line-number bits select storage after validation.
+
+The memory accepts at most one request, deasserts ready while it is pending,
+and requires a held request-valid to be withdrawn before it can be accepted
+again. Reads return the selected complete line. Writes commit the captured
+complete line once at successful completion and return a zero-data completion
+response.
+
+An address with nonzero bits `[3:0]` or a line number greater than or equal to
+`LINE_COUNT` completes with `memory_rsp_error`, returns zero data, and performs
+no write. Reset cancels pending control state and clears response outputs
+without committing a pending write. Reset does not erase the storage array;
+unwritten contents are unspecified.
+
+The active integration path is `shared_bus` (including `rr_arbiter`) directly
+to `shared_memory` through the signals listed above.
+
 ## Coherence to reservation logic
 
 Each core owns one reservation record containing:
