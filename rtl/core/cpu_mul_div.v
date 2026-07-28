@@ -8,6 +8,9 @@ module cpu_mul_div (
     output            busy,
     output            done
 );
+    timeunit 1ns;
+    timeprecision 1ps;
+
     wire        mul_busy, mul_done, div_busy, div_done;
     wire [31:0] mul_res,  div_res;
 

@@ -19,6 +19,9 @@ module cpu_control (
     output reg       is_muldiv,
     output reg       is_div
 );
+    timeunit 1ns;
+    timeprecision 1ps;
+
     localparam OP_RTYPE = 6'b000000;
     localparam OP_ADDI  = 6'b001000;
     localparam OP_SUBI  = 6'b001001;

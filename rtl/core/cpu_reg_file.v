@@ -13,6 +13,9 @@ module cpu_reg_file (
     output     [31:0]  rd1, rd2,
     output     [31:0]  r_out [0:31]
 );
+    timeunit 1ns;
+    timeprecision 1ps;
+
     reg [31:0] regs [0:31];
     integer i;
 

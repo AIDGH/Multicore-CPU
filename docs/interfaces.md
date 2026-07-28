@@ -18,40 +18,41 @@ transitions, or implementation-specific state machines.
 
 ## Core to L1 cache
 
-### Core-owned request signals
+### Active CPU data-side signals
 
-- `request_valid`: indicates a pending memory operation.
-- `request_address`: 32-bit byte address.
-- `request_op`: ordinary load, ordinary store, `lr.w`, `sc.w`, or
-  `amoadd.w`.
-- `request_write_data`: store operand or the addend for `amoadd.w`.
-
-### Cache-owned request and response signals
-
-- `request_ready`: accepts the request when high in the same cycle as
-  `request_valid`.
-- `response_valid`: asserted only after the requested operation completes.
-- `response_read_data`: load/LR data or the old word returned by
-  `amoadd.w`.
-- `response_status`: ordinary completion, successful `sc.w`, or failed
-  `sc.w`.
+- `data_req_valid`: indicates a pending memory operation.
+- `data_req_ready`: accepts the request when high in the same cycle as
+  `data_req_valid`.
+- `data_req_addr`: 32-bit byte address.
+- `data_req_write`: `0` for an ordinary word load and `1` for an ordinary
+  word store.
+- `data_req_wdata`: store data; ignored for loads.
+- `data_rsp_valid`: asserted only after the accepted operation completes.
+- `data_rsp_rdata`: returned load data.
+- `data_rsp_error`: indicates that the completed operation failed.
 
 ### Protocol
 
-1. A request is accepted on `request_valid && request_ready`.
+1. A request is accepted on `data_req_valid && data_req_ready`.
 2. The core must keep address, operation, and write operand stable while
-   `request_valid` is high and `request_ready` is low.
-3. After acceptance, the core may deassert `request_valid`, but it may not
+   `data_req_valid` is high and `data_req_ready` is low.
+3. After acceptance, the core deasserts `data_req_valid`, but it may not
    issue another data request until the response arrives.
-4. The core waits from request issue through `response_valid`; its PC and
+4. The core waits from request issue through `data_rsp_valid`; its PC and
    affected architectural state must not retire the operation early.
-5. `response_valid` represents completion, not merely queueing or bus
+5. `data_rsp_valid` represents completion, not merely queueing or bus
    acceptance.
-6. A failed `sc.w` performs no write. Every `sc.w` attempt eventually clears
-   the local reservation.
+6. A successful load writes its destination register exactly once when the
+   response arrives. A store completes only when its response arrives and
+   never writes a register.
+7. An error response suppresses completion, leaves the PC and architectural
+   state unchanged, and places the CPU in a terminal memory-error stall until
+   reset. The current foundation has no data-access exception, retry, or trap
+   mechanism.
 
-The current active CPU does not yet implement this contract. Adapting it is a
-later milestone.
+The active CPU currently supports only ordinary word loads and stores through
+this interface. Cache-coherence operations, atomics, reservations, and
+multicore extensions remain deferred.
 
 ## L1 cache to shared bus
 

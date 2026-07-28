@@ -7,15 +7,22 @@ module cpu_core (
     input              Rst,
     input      [31:0]  InstrIn,
     output     [31:0]  InstrAddr,
-    input      [31:0]  DataIn,
-    output     [31:0]  DataOut,
-    output             DataWrite,
-    output     [31:0]  DataAddr,
+    output             data_req_valid,
+    input              data_req_ready,
+    output     [31:0]  data_req_addr,
+    output             data_req_write,
+    output     [31:0]  data_req_wdata,
+    input              data_rsp_valid,
+    input      [31:0]  data_rsp_rdata,
+    input              data_rsp_error,
     output     [31:0]  R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7,
     output     [31:0]  R8,  R9,  R10, R11, R12, R13, R14, R15,
     output     [31:0]  R16, R17, R18, R19, R20, R21, R22, R23,
     output     [31:0]  R24, R25, R26, R27, R28, R29, R30, R31
 );
+    timeunit 1ns;
+    timeprecision 1ps;
+
     reg  [31:0] PC;
     wire [31:0] pc_plus_4 = PC + 32'd4;
 
@@ -43,14 +50,45 @@ module cpu_core (
     wire [31:0] md_result;
     wire        md_busy, md_done;
     wire        md_start = is_muldiv & ~md_busy & ~md_done;
-    wire        stall    = is_muldiv & ~md_done;
+    wire        md_stall = is_muldiv & ~md_done;
+
+    localparam [1:0]
+        MEM_IDLE          = 2'd0,
+        MEM_WAIT_ACCEPT   = 2'd1,
+        MEM_WAIT_RESPONSE = 2'd2,
+        MEM_ERROR_HALT    = 2'd3;
+
+    reg [1:0]  mem_state;
+    reg [31:0] mem_req_addr;
+    reg        mem_req_write;
+    reg [31:0] mem_req_wdata;
+    reg        mem_req_is_load;
+    reg [4:0]  mem_load_dest;
+
+    wire memory_instruction = MemRead | MemWrite;
+    wire memory_wait = (mem_state != MEM_IDLE) |
+                       ((mem_state == MEM_IDLE) & memory_instruction);
+    wire memory_response_received =
+        (mem_state == MEM_WAIT_RESPONSE) & data_rsp_valid;
+    wire memory_response_complete =
+        memory_response_received & ~data_rsp_error;
+    wire load_response_success =
+        memory_response_complete & mem_req_is_load;
 
     wire [31:0] rs_val, rt_val;
     wire [31:0] regs_o [0:31];
-    wire [4:0]  write_reg = (RegDst == 2'd1) ? rd :
-                            (RegDst == 2'd2) ? 5'd31 : rt;
-    wire [31:0] write_data;
-    wire        reg_we = RegWrite & ~stall;
+    wire [4:0]  normal_write_reg = (RegDst == 2'd1) ? rd :
+                                   (RegDst == 2'd2) ? 5'd31 : rt;
+    wire [4:0]  write_reg = load_response_success ? mem_load_dest
+                                                  : normal_write_reg;
+    wire [31:0] normal_write_data;
+    wire [31:0] write_data = load_response_success ? data_rsp_rdata
+                                                    : normal_write_data;
+    wire normal_reg_we = (mem_state == MEM_IDLE) &
+                         ~memory_instruction &
+                         RegWrite &
+                         ~md_stall;
+    wire reg_we = normal_reg_we | load_response_success;
 
     cpu_reg_file u_rf (
         .clk(Clk), .rst(Rst), .we(reg_we),
@@ -66,6 +104,16 @@ module cpu_core (
         .a(rs_val), .b(alu_b), .op(ALUOp), .y(alu_y), .zero(zero)
     );
 
+    assign data_req_valid = ~Rst &
+                            (((mem_state == MEM_IDLE) & memory_instruction) |
+                             (mem_state == MEM_WAIT_ACCEPT));
+    assign data_req_addr  = (mem_state == MEM_IDLE) ? alu_y
+                                                    : mem_req_addr;
+    assign data_req_write = (mem_state == MEM_IDLE) ? MemWrite
+                                                    : mem_req_write;
+    assign data_req_wdata = (mem_state == MEM_IDLE) ? rt_val
+                                                    : mem_req_wdata;
+
     cpu_mul_div u_md (
         .clk(Clk), .rst(Rst), .start(md_start), .is_div(is_div),
         .a(rs_val), .b(rt_val),
@@ -74,14 +122,8 @@ module cpu_core (
 
     wire [31:0] compute_result = is_muldiv ? md_result : alu_y;
 
-    assign write_data = (MemtoReg == 2'd1) ? DataIn        :
-                        (MemtoReg == 2'd2) ? pc_plus_4     :
-                                             compute_result;
-
-    assign DataOut   = rt_val;
-    assign DataWrite = MemWrite & ~stall;
-    assign DataAddr  = (MemRead | MemWrite) ? {2'b00, alu_y[31:2]}
-                                            : 32'h0000_4000;
+    assign normal_write_data = (MemtoReg == 2'd2) ? pc_plus_4
+                                                   : compute_result;
 
     assign InstrAddr = PC >> 2;
 
@@ -93,8 +135,58 @@ module cpu_core (
                                             pc_plus_4;
 
     always @(posedge Clk or posedge Rst) begin
-        if (Rst)          PC <= 32'b0;
-        else if (!stall)  PC <= next_pc;
+        if (Rst) begin
+            mem_state       <= MEM_IDLE;
+            mem_req_addr    <= 32'b0;
+            mem_req_write   <= 1'b0;
+            mem_req_wdata   <= 32'b0;
+            mem_req_is_load <= 1'b0;
+            mem_load_dest   <= 5'b0;
+        end else begin
+            case (mem_state)
+                MEM_IDLE: begin
+                    if (memory_instruction) begin
+                        mem_req_addr    <= alu_y;
+                        mem_req_write   <= MemWrite;
+                        mem_req_wdata   <= rt_val;
+                        mem_req_is_load <= MemRead;
+                        mem_load_dest   <= rt;
+
+                        if (data_req_ready)
+                            mem_state <= MEM_WAIT_RESPONSE;
+                        else
+                            mem_state <= MEM_WAIT_ACCEPT;
+                    end
+                end
+
+                MEM_WAIT_ACCEPT: begin
+                    if (data_req_ready)
+                        mem_state <= MEM_WAIT_RESPONSE;
+                end
+
+                MEM_WAIT_RESPONSE: begin
+                    if (data_rsp_valid) begin
+                        if (data_rsp_error)
+                            mem_state <= MEM_ERROR_HALT;
+                        else
+                            mem_state <= MEM_IDLE;
+                    end
+                end
+
+                MEM_ERROR_HALT: mem_state <= MEM_ERROR_HALT;
+
+                default: mem_state <= MEM_IDLE;
+            endcase
+        end
+    end
+
+    always @(posedge Clk or posedge Rst) begin
+        if (Rst)
+            PC <= 32'b0;
+        else if (memory_response_complete)
+            PC <= pc_plus_4;
+        else if (!md_stall && !memory_wait)
+            PC <= next_pc;
     end
 
     assign R0=regs_o[0];   assign R1=regs_o[1];   assign R2=regs_o[2];   assign R3=regs_o[3];

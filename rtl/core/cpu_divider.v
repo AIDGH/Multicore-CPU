@@ -9,6 +9,9 @@ module cpu_divider (
     output reg        busy,
     output reg        done
 );
+    timeunit 1ns;
+    timeprecision 1ps;
+
     reg [31:0] Q, R, b_reg;
     reg [5:0]  count;
 
