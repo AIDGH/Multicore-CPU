@@ -108,8 +108,46 @@ run_shared_bus() {
     vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
 }
 
+run_shared_memory() {
+    local test_name="shared_memory"
+    local build_dir="${repo_root}/build/${test_name}"
+    local simulation="${build_dir}/tb_shared_memory.vvp"
+
+    mkdir -p "${build_dir}"
+
+    iverilog -g2012 -Wall \
+        -s tb_shared_memory \
+        -o "${simulation}" \
+        "${repo_root}/rtl/common/mc_defs.svh" \
+        "${repo_root}/rtl/memory/shared_memory.sv" \
+        "${repo_root}/tb/unit/tb_shared_memory.sv" \
+        2>&1 | tee "${build_dir}/compile.log"
+
+    vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
+}
+
+run_bus_memory() {
+    local test_name="bus_memory"
+    local build_dir="${repo_root}/build/${test_name}"
+    local simulation="${build_dir}/tb_bus_memory.vvp"
+
+    mkdir -p "${build_dir}"
+
+    iverilog -g2012 -Wall \
+        -s tb_bus_memory \
+        -o "${simulation}" \
+        "${repo_root}/rtl/common/mc_defs.svh" \
+        "${repo_root}/rtl/bus/rr_arbiter.sv" \
+        "${repo_root}/rtl/bus/shared_bus.sv" \
+        "${repo_root}/rtl/memory/shared_memory.sv" \
+        "${repo_root}/tb/integration/tb_bus_memory.sv" \
+        2>&1 | tee "${build_dir}/compile.log"
+
+    vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
+}
+
 usage() {
-    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|rr_arbiter|shared_bus|all}" >&2
+    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|rr_arbiter|shared_bus|shared_memory|bus_memory|all}" >&2
 }
 
 case "${1:-}" in
@@ -128,12 +166,20 @@ case "${1:-}" in
     shared_bus)
         run_shared_bus
         ;;
+    shared_memory)
+        run_shared_memory
+        ;;
+    bus_memory)
+        run_bus_memory
+        ;;
     all)
         run_cpu_baseline
         run_interfaces
         run_cpu_memory_handshake
         run_rr_arbiter
         run_shared_bus
+        run_shared_memory
+        run_bus_memory
         ;;
     *)
         usage
