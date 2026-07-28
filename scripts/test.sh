@@ -72,8 +72,25 @@ run_cpu_memory_handshake() {
     vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
 }
 
+run_rr_arbiter() {
+    local test_name="rr_arbiter"
+    local build_dir="${repo_root}/build/${test_name}"
+    local simulation="${build_dir}/tb_rr_arbiter.vvp"
+
+    mkdir -p "${build_dir}"
+
+    iverilog -g2012 -Wall \
+        -s tb_rr_arbiter \
+        -o "${simulation}" \
+        "${repo_root}/rtl/bus/rr_arbiter.sv" \
+        "${repo_root}/tb/unit/tb_rr_arbiter.sv" \
+        2>&1 | tee "${build_dir}/compile.log"
+
+    vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
+}
+
 usage() {
-    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|all}" >&2
+    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|rr_arbiter|all}" >&2
 }
 
 case "${1:-}" in
@@ -86,10 +103,14 @@ case "${1:-}" in
     cpu_memory_handshake)
         run_cpu_memory_handshake
         ;;
+    rr_arbiter)
+        run_rr_arbiter
+        ;;
     all)
         run_cpu_baseline
         run_interfaces
         run_cpu_memory_handshake
+        run_rr_arbiter
         ;;
     *)
         usage
