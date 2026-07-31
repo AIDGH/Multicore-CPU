@@ -1,0 +1,12 @@
+instructions[0] = ATYPE(6'b010111, 5'd1, 5'd0, 5'd2, 6'b000010);
+instructions[1] = ITYPE(6'b000101, 5'd2, 5'd0, 16'hFFFE);
+instructions[2] = ITYPE(6'b001000, 5'd0, 5'd3, 16'd1);
+instructions[3] = ATYPE(6'b010111, 5'd1, 5'd3, 5'd3, 6'b000011);
+instructions[4] = ITYPE(6'b000101, 5'd3, 5'd0, 16'hFFFB);
+instructions[5] = ITYPE(6'b100011, 5'd5, 5'd4, 16'd0);
+instructions[6] = ITYPE(6'b001000, 5'd4, 5'd4, 16'd1);
+instructions[7] = ITYPE(6'b101011, 5'd5, 5'd4, 16'd0);
+instructions[8] = ITYPE(6'b101011, 5'd1, 5'd0, 16'd0);
+
+instructions[0] = ITYPE(6'b001000, 5'd0, 5'd2, 16'd1);
+instructions[1] = ATYPE(6'b010111, 5'd1, 5'd2, 5'd4, 6'b000000);
