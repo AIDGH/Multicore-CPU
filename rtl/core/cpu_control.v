@@ -1,7 +1,3 @@
-// ============================================================
-//  cpu_control : combinational instruction decoder
-//  Defaults describe a NOP; supported instructions override them.
-// ============================================================
 module cpu_control (
     input      [5:0] opcode,
     input      [5:0] funct,
@@ -17,7 +13,11 @@ module cpu_control (
     output reg       JumpReg,
     output reg [1:0] ALUOp,
     output reg       is_muldiv,
-    output reg       is_div
+    output reg       is_div,
+    output reg       is_lr,
+    output reg       is_sc,
+    output reg       is_amoadd,
+    output reg       is_cpuid
 );
     timeunit 1ns;
     timeprecision 1ps;
@@ -31,12 +31,19 @@ module cpu_control (
     localparam OP_BEQ   = 6'b000100;
     localparam OP_J     = 6'b000010;
     localparam OP_JAL   = 6'b000011;
+    
+    localparam OP_CPUID = 6'b011111;
+    localparam OP_AMO   = 6'b010111;
 
     localparam F_ADD = 6'b100000;
     localparam F_SUB = 6'b100010;
     localparam F_MUL = 6'b011000;
     localparam F_DIV = 6'b011010;
     localparam F_JR  = 6'b001000;
+    
+    localparam F_LR     = 6'b000010;
+    localparam F_SC     = 6'b000011;
+    localparam F_AMOADD = 6'b000000;
 
     localparam ALU_ADD = 2'b00;
     localparam ALU_SUB = 2'b01;
@@ -46,6 +53,7 @@ module cpu_control (
         RegDst=2'd0; RegWrite=1'b0; ALUSrc=1'b0; MemtoReg=2'd0;
         MemRead=1'b0; MemWrite=1'b0; Branch=1'b0; Jump=1'b0;
         Jal=1'b0; JumpReg=1'b0; ALUOp=ALU_ADD; is_muldiv=1'b0; is_div=1'b0;
+        is_lr=1'b0; is_sc=1'b0; is_amoadd=1'b0; is_cpuid=1'b0;
 
         case (opcode)
             OP_RTYPE: begin
@@ -77,6 +85,24 @@ module cpu_control (
                 Jump=1'b1; Jal=1'b1;
                 RegWrite=1'b1; RegDst=2'd2;
                 MemtoReg=2'd2;
+            end
+            OP_CPUID: begin
+                RegWrite=1'b1; RegDst=2'd1; is_cpuid=1'b1;
+            end
+            OP_AMO: begin
+                RegDst = 2'd1;
+                case (funct)
+                    F_LR: begin 
+                        RegWrite=1'b1; is_lr=1'b1; MemRead=1'b1; MemtoReg=2'd1;
+                    end
+                    F_SC: begin 
+                        RegWrite=1'b1; is_sc=1'b1; MemWrite=1'b1;
+                    end
+                    F_AMOADD: begin 
+                        RegWrite=1'b1; is_amoadd=1'b1; MemRead=1'b1; MemWrite=1'b1; MemtoReg=2'd1;
+                    end
+                    default: ;
+                endcase
             end
             default: ;
         endcase

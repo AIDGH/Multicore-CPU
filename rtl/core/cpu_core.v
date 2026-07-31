@@ -1,16 +1,15 @@
-// ============================================================
-//  cpu_core : active, behavior-preserving migration of Hw6/main.v
-//  32-bit single-cycle MIPS-like CPU with sequential multiply/divide.
-// ============================================================
 module cpu_core (
     input              Clk,
     input              Rst,
+    input              core_id,
+    input              cancel_reservation,
     input      [31:0]  InstrIn,
     output     [31:0]  InstrAddr,
     output             data_req_valid,
     input              data_req_ready,
     output     [31:0]  data_req_addr,
     output             data_req_write,
+    output     [2:0]   data_req_op,
     output     [31:0]  data_req_wdata,
     input              data_rsp_valid,
     input      [31:0]  data_rsp_rdata,
@@ -38,13 +37,15 @@ module cpu_core (
     wire [1:0] RegDst, MemtoReg, ALUOp;
     wire       RegWrite, ALUSrc, MemRead, MemWrite;
     wire       Branch, Jump, Jal, JumpReg, is_muldiv, is_div;
+    wire       is_lr, is_sc, is_amoadd, is_cpuid;
 
     cpu_control u_ctrl (
         .opcode(opcode), .funct(funct),
         .RegDst(RegDst), .RegWrite(RegWrite), .ALUSrc(ALUSrc),
         .MemtoReg(MemtoReg), .MemRead(MemRead), .MemWrite(MemWrite),
         .Branch(Branch), .Jump(Jump), .Jal(Jal), .JumpReg(JumpReg),
-        .ALUOp(ALUOp), .is_muldiv(is_muldiv), .is_div(is_div)
+        .ALUOp(ALUOp), .is_muldiv(is_muldiv), .is_div(is_div),
+        .is_lr(is_lr), .is_sc(is_sc), .is_amoadd(is_amoadd), .is_cpuid(is_cpuid)
     );
 
     wire [31:0] md_result;
@@ -58,44 +59,27 @@ module cpu_core (
         MEM_WAIT_RESPONSE = 2'd2,
         MEM_ERROR_HALT    = 2'd3;
 
+    localparam [2:0]
+        MC_MEM_LOAD   = 3'd0,
+        MC_MEM_STORE  = 3'd1,
+        MC_MEM_LR     = 3'd2,
+        MC_MEM_SC     = 3'd3,
+        MC_MEM_AMOADD = 3'd4;
+
     reg [1:0]  mem_state;
     reg [31:0] mem_req_addr;
     reg        mem_req_write;
+    reg [2:0]  mem_req_op_reg;
     reg [31:0] mem_req_wdata;
     reg        mem_req_is_load;
+    reg        mem_req_is_sc;
     reg [4:0]  mem_load_dest;
 
-    wire memory_instruction = MemRead | MemWrite;
-    wire memory_wait = (mem_state != MEM_IDLE) |
-                       ((mem_state == MEM_IDLE) & memory_instruction);
-    wire memory_response_received =
-        (mem_state == MEM_WAIT_RESPONSE) & data_rsp_valid;
-    wire memory_response_complete =
-        memory_response_received & ~data_rsp_error;
-    wire load_response_success =
-        memory_response_complete & mem_req_is_load;
+    reg [31:0] reserve_addr;
+    reg        reserve_valid;
 
     wire [31:0] rs_val, rt_val;
-    wire [31:0] regs_o [0:31];
-    wire [4:0]  normal_write_reg = (RegDst == 2'd1) ? rd :
-                                   (RegDst == 2'd2) ? 5'd31 : rt;
-    wire [4:0]  write_reg = load_response_success ? mem_load_dest
-                                                  : normal_write_reg;
-    wire [31:0] normal_write_data;
-    wire [31:0] write_data = load_response_success ? data_rsp_rdata
-                                                    : normal_write_data;
-    wire normal_reg_we = (mem_state == MEM_IDLE) &
-                         ~memory_instruction &
-                         RegWrite &
-                         ~md_stall;
-    wire reg_we = normal_reg_we | load_response_success;
-
-    cpu_reg_file u_rf (
-        .clk(Clk), .rst(Rst), .we(reg_we),
-        .ra1(rs), .ra2(rt), .wa(write_reg), .wd(write_data),
-        .rd1(rs_val), .rd2(rt_val), .r_out(regs_o)
-    );
-
+    
     wire [31:0] alu_b = ALUSrc ? imm_sext : rt_val;
     wire [31:0] alu_y;
     wire        zero;
@@ -104,13 +88,57 @@ module cpu_core (
         .a(rs_val), .b(alu_b), .op(ALUOp), .y(alu_y), .zero(zero)
     );
 
+    wire [31:0] mem_target_addr = (is_lr | is_sc | is_amoadd) ? rs_val : alu_y;
+    wire sc_success = reserve_valid & (reserve_addr == rs_val);
+    wire sc_fail_local = is_sc & ~sc_success;
+
+    wire memory_instruction = (MemRead | MemWrite) & ~sc_fail_local;
+    wire memory_wait = (mem_state != MEM_IDLE) |
+                       ((mem_state == MEM_IDLE) & memory_instruction);
+    wire memory_response_received =
+        (mem_state == MEM_WAIT_RESPONSE) & data_rsp_valid;
+    wire memory_response_complete =
+        memory_response_received & ~data_rsp_error;
+    wire load_response_success =
+        memory_response_complete & mem_req_is_load;
+    wire sc_response_success = 
+        memory_response_complete & mem_req_is_sc;
+
+    wire [31:0] regs_o [0:31];
+    wire [4:0]  normal_write_reg = (RegDst == 2'd1) ? rd :
+                                   (RegDst == 2'd2) ? 5'd31 : rt;
+    wire [4:0]  write_reg = (load_response_success | sc_response_success) ? mem_load_dest
+                                                  : normal_write_reg;
+    wire [31:0] normal_write_data;
+    
+    wire [31:0] write_data = is_cpuid ? {31'b0, core_id} :
+                             (is_sc && sc_fail_local && mem_state == MEM_IDLE) ? 32'd1 :
+                             sc_response_success ? 32'd0 :
+                             load_response_success ? data_rsp_rdata
+                                                   : normal_write_data;
+
+    wire normal_reg_we = (mem_state == MEM_IDLE) &
+                         ~memory_instruction &
+                         RegWrite &
+                         ~md_stall;
+                         
+    wire reg_we = normal_reg_we | load_response_success | sc_response_success;
+
+    cpu_reg_file u_rf (
+        .clk(Clk), .rst(Rst), .we(reg_we),
+        .ra1(rs), .ra2(rt), .wa(write_reg), .wd(write_data),
+        .rd1(rs_val), .rd2(rt_val), .r_out(regs_o)
+    );
+
     assign data_req_valid = ~Rst &
                             (((mem_state == MEM_IDLE) & memory_instruction) |
                              (mem_state == MEM_WAIT_ACCEPT));
-    assign data_req_addr  = (mem_state == MEM_IDLE) ? alu_y
+    assign data_req_addr  = (mem_state == MEM_IDLE) ? mem_target_addr
                                                     : mem_req_addr;
     assign data_req_write = (mem_state == MEM_IDLE) ? MemWrite
                                                     : mem_req_write;
+    assign data_req_op    = (mem_state == MEM_IDLE) ? (is_lr ? MC_MEM_LR : is_sc ? MC_MEM_SC : is_amoadd ? MC_MEM_AMOADD : MemRead ? MC_MEM_LOAD : MC_MEM_STORE)
+                                                    : mem_req_op_reg;
     assign data_req_wdata = (mem_state == MEM_IDLE) ? rt_val
                                                     : mem_req_wdata;
 
@@ -140,17 +168,21 @@ module cpu_core (
             mem_req_addr    <= 32'b0;
             mem_req_write   <= 1'b0;
             mem_req_wdata   <= 32'b0;
+            mem_req_op_reg  <= 3'b0;
             mem_req_is_load <= 1'b0;
+            mem_req_is_sc   <= 1'b0;
             mem_load_dest   <= 5'b0;
         end else begin
             case (mem_state)
                 MEM_IDLE: begin
                     if (memory_instruction) begin
-                        mem_req_addr    <= alu_y;
+                        mem_req_addr    <= mem_target_addr;
                         mem_req_write   <= MemWrite;
                         mem_req_wdata   <= rt_val;
+                        mem_req_op_reg  <= is_lr ? MC_MEM_LR : is_sc ? MC_MEM_SC : is_amoadd ? MC_MEM_AMOADD : MemRead ? MC_MEM_LOAD : MC_MEM_STORE;
                         mem_req_is_load <= MemRead;
-                        mem_load_dest   <= rt;
+                        mem_req_is_sc   <= is_sc;
+                        mem_load_dest   <= (is_lr | is_sc | is_amoadd) ? rd : rt;
 
                         if (data_req_ready)
                             mem_state <= MEM_WAIT_RESPONSE;
@@ -177,6 +209,20 @@ module cpu_core (
 
                 default: mem_state <= MEM_IDLE;
             endcase
+        end
+    end
+
+    always @(posedge Clk or posedge Rst) begin
+        if (Rst) begin
+            reserve_valid <= 1'b0;
+            reserve_addr <= 32'b0;
+        end else if (cancel_reservation) begin
+            reserve_valid <= 1'b0;
+        end else if (load_response_success && mem_req_op_reg == MC_MEM_LR) begin
+            reserve_valid <= 1'b1;
+            reserve_addr <= mem_req_addr;
+        end else if (sc_response_success || (is_sc && sc_fail_local && mem_state == MEM_IDLE)) begin
+            reserve_valid <= 1'b0;
         end
     end
 

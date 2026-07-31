@@ -72,6 +72,31 @@ run_cpu_memory_handshake() {
     vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
 }
 
+run_cpu_atomic_unit() {
+    local test_name="cpu_atomic_unit"
+    local build_dir="${repo_root}/build/${test_name}"
+    local simulation="${build_dir}/tb_cpu_atomic_unit.vvp"
+
+    mkdir -p "${build_dir}"
+
+    iverilog -g2012 -Wall \
+        -s tb_cpu_atomic_unit \
+        -o "${simulation}" \
+        "${repo_root}/rtl/common/mc_defs.svh" \
+        "${repo_root}/rtl/core/cpu_alu.v" \
+        "${repo_root}/rtl/core/cpu_control.v" \
+        "${repo_root}/rtl/core/cpu_reg_file.v" \
+        "${repo_root}/rtl/core/cpu_multiplier.v" \
+        "${repo_root}/rtl/core/cpu_divider.v" \
+        "${repo_root}/rtl/core/cpu_mul_div.v" \
+        "${repo_root}/rtl/core/cpu_core.v" \
+        "${repo_root}/tb/mocks/mock_l1.sv" \
+        "${repo_root}/tb/unit/tb_cpu_atomic_unit.sv" \
+        2>&1 | tee "${build_dir}/compile.log"
+
+    vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
+}
+
 run_rr_arbiter() {
     local test_name="rr_arbiter"
     local build_dir="${repo_root}/build/${test_name}"
@@ -168,7 +193,7 @@ run_multicore_interconnect_top() {
 }
 
 usage() {
-    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|rr_arbiter|shared_bus|shared_memory|bus_memory|multicore_interconnect_top|all}" >&2
+    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|cpu_atomic_unit|rr_arbiter|shared_bus|shared_memory|bus_memory|multicore_interconnect_top|all}" >&2
 }
 
 case "${1:-}" in
@@ -180,6 +205,9 @@ case "${1:-}" in
         ;;
     cpu_memory_handshake)
         run_cpu_memory_handshake
+        ;;
+    cpu_atomic_unit)
+        run_cpu_atomic_unit
         ;;
     rr_arbiter)
         run_rr_arbiter
@@ -200,6 +228,7 @@ case "${1:-}" in
         run_cpu_baseline
         run_interfaces
         run_cpu_memory_handshake
+        run_cpu_atomic_unit
         run_rr_arbiter
         run_shared_bus
         run_shared_memory
