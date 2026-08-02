@@ -17,7 +17,7 @@ module tb_l1_cache_mesi;
     logic        data_req_valid;
     logic        data_req_ready;
     logic [31:0] data_req_addr;
-    logic        data_req_write;
+    logic [2:0] data_req_op;
     logic [31:0] data_req_wdata;
     logic        data_rsp_valid;
     logic [31:0] data_rsp_rdata;
@@ -57,7 +57,7 @@ module tb_l1_cache_mesi;
         @(posedge clk);
         data_req_valid <= 1'b1;
         data_req_addr  <= addr;
-        data_req_write <= 1'b0;
+        data_req_op <= 3'd0;
         
         wait(data_req_ready);
         @(posedge clk);
@@ -72,7 +72,7 @@ module tb_l1_cache_mesi;
         @(posedge clk);
         data_req_valid <= 1'b1;
         data_req_addr  <= addr;
-        data_req_write <= 1'b1;
+        data_req_op <= 3'd1;
         data_req_wdata <= data;
         
         wait(data_req_ready);

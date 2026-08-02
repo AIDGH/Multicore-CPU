@@ -1,5 +1,4 @@
 import mc_defs_pkg::*;
-
 module multicore_interconnect_top #(
     parameter integer MEMORY_LINE_COUNT       = 256,
     parameter integer MEMORY_RESPONSE_LATENCY = 2
