@@ -191,9 +191,38 @@ run_multicore_interconnect_top() {
 
     vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
 }
+run_dual_core_top() {
+    local test_name="dual_core_top"
+    local build_dir="${repo_root}/build/${test_name}"
+    local simulation="${build_dir}/tb_dual_core_top.vvp"
+
+    mkdir -p "${build_dir}"
+
+    iverilog -g2012 -Wall \
+        -s tb_dual_core_top \
+        -o "${simulation}" \
+        "${repo_root}/rtl/common/mc_defs.svh" \
+        "${repo_root}/rtl/core/cpu_alu.v" \
+        "${repo_root}/rtl/core/cpu_control.v" \
+        "${repo_root}/rtl/core/cpu_reg_file.v" \
+        "${repo_root}/rtl/core/cpu_multiplier.v" \
+        "${repo_root}/rtl/core/cpu_divider.v" \
+        "${repo_root}/rtl/core/cpu_mul_div.v" \
+        "${repo_root}/rtl/core/cpu_core.v" \
+        "${repo_root}/rtl/cache/l1_cache_mesi.sv" \
+        "${repo_root}/rtl/bus/rr_arbiter.sv" \
+        "${repo_root}/rtl/bus/shared_bus.sv" \
+        "${repo_root}/rtl/memory/shared_memory.sv" \
+        "${repo_root}/rtl/top/multicore_interconnect_top.sv" \
+        "${repo_root}/rtl/top/dual_core_top.sv" \
+        "${repo_root}/tb/integration/tb_dual_core_top.sv" \
+        2>&1 | tee "${build_dir}/compile.log"
+
+    vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
+}
 
 usage() {
-    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|cpu_atomic_unit|rr_arbiter|shared_bus|shared_memory|bus_memory|multicore_interconnect_top|all}" >&2
+    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|cpu_atomic_unit|rr_arbiter|shared_bus|shared_memory|bus_memory|multicore_interconnect_top|dual_core_top|all}" >&2
 }
 
 case "${1:-}" in
@@ -224,6 +253,9 @@ case "${1:-}" in
     multicore_interconnect_top)
         run_multicore_interconnect_top
         ;;
+    dual_core_top)
+        run_dual_core_top
+        ;;    
     all)
         run_cpu_baseline
         run_interfaces
@@ -234,6 +266,7 @@ case "${1:-}" in
         run_shared_memory
         run_bus_memory
         run_multicore_interconnect_top
+        run_dual_core_top
         ;;
     *)
         usage
