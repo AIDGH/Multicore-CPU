@@ -56,16 +56,21 @@ module dual_core_top #(
     logic         c0_bus_req;
     logic         c0_bus_req_rdx;
     logic [31:0]  c0_bus_req_addr;
+    logic [127:0] c0_bus_req_wdata;   // Added: Write-Back Data
     logic         c0_bus_gnt;
     logic         c0_bus_rsp_valid;
     logic [127:0] c0_bus_rsp_rdata;
+    logic         c0_bus_rsp_shared;  // Added: Shared Response
+    logic         c0_bus_rsp_error;   // Added: Error Response
 
     logic         c0_snoop_valid;
+    mc_bus_txn_t  c0_snoop_txn;       // Added: Snoop Transaction Type
     logic [31:0]  c0_snoop_addr;
     logic         c0_snoop_rdx;
     logic         c0_snoop_shared;
     logic         c0_snoop_flush;
     logic [127:0] c0_snoop_wdata;
+    logic         c0_snoop_rsp_valid; // Added: Snoop Ack
 
     mc_bus_txn_t  c0_bus_txn;
 
@@ -75,16 +80,21 @@ module dual_core_top #(
     logic         c1_bus_req;
     logic         c1_bus_req_rdx;
     logic [31:0]  c1_bus_req_addr;
+    logic [127:0] c1_bus_req_wdata;   // Added: Write-Back Data
     logic         c1_bus_gnt;
     logic         c1_bus_rsp_valid;
     logic [127:0] c1_bus_rsp_rdata;
+    logic         c1_bus_rsp_shared;  // Added: Shared Response
+    logic         c1_bus_rsp_error;   // Added: Error Response
 
     logic         c1_snoop_valid;
+    mc_bus_txn_t  c1_snoop_txn;       // Added: Snoop Transaction Type
     logic [31:0]  c1_snoop_addr;
     logic         c1_snoop_rdx;
     logic         c1_snoop_shared;
     logic         c1_snoop_flush;
     logic [127:0] c1_snoop_wdata;
+    logic         c1_snoop_rsp_valid; // Added: Snoop Ack
 
     mc_bus_txn_t  c1_bus_txn;
 
@@ -101,7 +111,7 @@ module dual_core_top #(
     wire rst_n = ~rst;
 
     // =========================================================
-    // 1. Core 0 & Core 1 Instantiation (Shahab's Modules)
+    // 1. Core 0 & Core 1 Instantiation
     // =========================================================
     cpu_core u_core0 (
         .Clk                (clk),
@@ -156,7 +166,7 @@ module dual_core_top #(
     );
 
     // =========================================================
-    // 2. L1 MESI Cache Instantiation (Arad's Modules)
+    // 2. L1 MESI Cache Instantiation
     // =========================================================
     l1_cache_mesi u_cache0 (
         .clk                (clk),
@@ -170,15 +180,22 @@ module dual_core_top #(
         .data_rsp_rdata     (c0_rsp_rdata),
         .data_rsp_error     (c0_rsp_error),
         .cancel_reservation (c0_cancel_reservation),
+
         .bus_req            (c0_bus_req),
         .bus_req_rdx        (c0_bus_req_rdx),
         .bus_req_addr       (c0_bus_req_addr),
+        .bus_req_wdata      (c0_bus_req_wdata),   // Fixed
         .bus_gnt            (c0_bus_gnt),
         .bus_rsp_valid      (c0_bus_rsp_valid),
         .bus_rsp_rdata      (c0_bus_rsp_rdata),
+        .bus_rsp_shared     (c0_bus_rsp_shared),  // Fixed
+        .bus_rsp_error      (c0_bus_rsp_error),   // Fixed
+
         .snoop_valid        (c0_snoop_valid),
+        .snoop_txn          (c0_snoop_txn),       // Fixed
         .snoop_addr         (c0_snoop_addr),
         .snoop_rdx          (c0_snoop_rdx),
+        .snoop_rsp_valid    (c0_snoop_rsp_valid), // Fixed
         .snoop_shared       (c0_snoop_shared),
         .snoop_flush        (c0_snoop_flush),
         .snoop_wdata        (c0_snoop_wdata)
@@ -196,22 +213,29 @@ module dual_core_top #(
         .data_rsp_rdata     (c1_rsp_rdata),
         .data_rsp_error     (c1_rsp_error),
         .cancel_reservation (c1_cancel_reservation),
+
         .bus_req            (c1_bus_req),
         .bus_req_rdx        (c1_bus_req_rdx),
         .bus_req_addr       (c1_bus_req_addr),
+        .bus_req_wdata      (c1_bus_req_wdata),   // Fixed
         .bus_gnt            (c1_bus_gnt),
         .bus_rsp_valid      (c1_bus_rsp_valid),
         .bus_rsp_rdata      (c1_bus_rsp_rdata),
+        .bus_rsp_shared     (c1_bus_rsp_shared),  // Fixed
+        .bus_rsp_error      (c1_bus_rsp_error),   // Fixed
+
         .snoop_valid        (c1_snoop_valid),
+        .snoop_txn          (c1_snoop_txn),       // Fixed
         .snoop_addr         (c1_snoop_addr),
         .snoop_rdx          (c1_snoop_rdx),
+        .snoop_rsp_valid    (c1_snoop_rsp_valid), // Fixed
         .snoop_shared       (c1_snoop_shared),
         .snoop_flush        (c1_snoop_flush),
         .snoop_wdata        (c1_snoop_wdata)
     );
 
     // =========================================================
-    // 3. Multicore Interconnect Top Instantiation (Ehsan's Module)
+    // 3. Multicore Interconnect Top Instantiation
     // =========================================================
     multicore_interconnect_top #(
         .MEMORY_LINE_COUNT(MEMORY_LINE_COUNT),
@@ -225,17 +249,17 @@ module dual_core_top #(
         .cache0_req_ready            (c0_bus_gnt),
         .cache0_req_txn              (c0_bus_txn),
         .cache0_req_line_addr        (c0_bus_req_addr),
-        .cache0_req_wdata            (c0_snoop_wdata),
+        .cache0_req_wdata            (c0_bus_req_wdata),  // Fixed (was c0_snoop_wdata)
         .cache0_rsp_valid            (c0_bus_rsp_valid),
         .cache0_rsp_data             (c0_bus_rsp_rdata),
-        .cache0_rsp_shared           (),
-        .cache0_rsp_error            (),
+        .cache0_rsp_shared           (c0_bus_rsp_shared), // Fixed
+        .cache0_rsp_error            (c0_bus_rsp_error),  // Fixed
 
         .cache0_snoop_valid          (c0_snoop_valid),
-        .cache0_snoop_txn            (),
+        .cache0_snoop_txn            (c0_snoop_txn),      // Fixed
         .cache0_snoop_line_addr      (c0_snoop_addr),
         .cache0_snoop_requester_id   (),
-        .cache0_snoop_rsp_valid      (1'b1),
+        .cache0_snoop_rsp_valid      (c0_snoop_rsp_valid),// Fixed (was 1'b1)
         .cache0_snoop_rsp_present    (c0_snoop_shared),
         .cache0_snoop_rsp_dirty      (c0_snoop_flush),
         .cache0_snoop_rsp_data_valid (c0_snoop_flush),
@@ -246,17 +270,17 @@ module dual_core_top #(
         .cache1_req_ready            (c1_bus_gnt),
         .cache1_req_txn              (c1_bus_txn),
         .cache1_req_line_addr        (c1_bus_req_addr),
-        .cache1_req_wdata            (c1_snoop_wdata),
+        .cache1_req_wdata            (c1_bus_req_wdata),  // Fixed (was c1_snoop_wdata)
         .cache1_rsp_valid            (c1_bus_rsp_valid),
         .cache1_rsp_data             (c1_bus_rsp_rdata),
-        .cache1_rsp_shared           (),
-        .cache1_rsp_error            (),
+        .cache1_rsp_shared           (c1_bus_rsp_shared), // Fixed
+        .cache1_rsp_error            (c1_bus_rsp_error),  // Fixed
 
         .cache1_snoop_valid          (c1_snoop_valid),
-        .cache1_snoop_txn            (),
+        .cache1_snoop_txn            (c1_snoop_txn),      // Fixed
         .cache1_snoop_line_addr      (c1_snoop_addr),
         .cache1_snoop_requester_id   (),
-        .cache1_snoop_rsp_valid      (1'b1),
+        .cache1_snoop_rsp_valid      (c1_snoop_rsp_valid),// Fixed (was 1'b1)
         .cache1_snoop_rsp_present    (c1_snoop_shared),
         .cache1_snoop_rsp_dirty      (c1_snoop_flush),
         .cache1_snoop_rsp_data_valid (c1_snoop_flush),
@@ -264,7 +288,7 @@ module dual_core_top #(
     );
 
     // Snoop Read/Write type drive logic
-    assign c0_snoop_rdx = (c1_bus_txn == MC_BUS_RDX);
-    assign c1_snoop_rdx = (c0_bus_txn == MC_BUS_RDX);
+    assign c0_snoop_rdx = (c0_snoop_txn == MC_BUS_RDX);
+    assign c1_snoop_rdx = (c1_snoop_txn == MC_BUS_RDX);
 
 endmodule

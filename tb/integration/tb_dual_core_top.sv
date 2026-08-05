@@ -41,23 +41,29 @@ module tb_dual_core_top;
         $dumpfile("build/dual_core_top/waves.vcd");
         $dumpvars(0, tb_dual_core_top);
 
-        instructions[0] = ATYPE(6'b010111, 5'd1, 5'd0, 5'd2, 6'b000010); // lr.w R2, (R1)
-        instructions[1] = ITYPE(6'b000101, 5'd2, 5'd0, 16'hFFFE);        // bne R2, R0, -2
-        instructions[2] = ITYPE(6'b001000, 5'd0, 5'd3, 16'd1);           // addi R3, R0, 1
-        instructions[3] = ATYPE(6'b010111, 5'd1, 5'd3, 5'd3, 6'b000011); // sc.w R3, (R1)
-        instructions[4] = ITYPE(6'b000101, 5'd3, 5'd0, 16'hFFFB);        // bne R3, R0, -5
-        instructions[5] = ITYPE(6'b100011, 5'd5, 5'd4, 16'd0);           // lw R4, (R5)
-        instructions[6] = ITYPE(6'b001000, 5'd4, 5'd4, 16'd1);           // addi R4, R4, 1
-        instructions[7] = ITYPE(6'b101011, 5'd5, 5'd4, 16'd0);           // sw R4, (R5)
-        instructions[8] = ITYPE(6'b101011, 5'd1, 5'd0, 16'd0);           // sw R0, (R1)
+        instructions[0] = ITYPE(6'b001000, 5'd0, 5'd1, 16'h0010); // تنظیم آدرس قفل
+            instructions[1] = ITYPE(6'b001000, 5'd0, 5'd5, 16'h0020); // تنظیم آدرس کانتر
 
-        for (int i = 9; i < 16; i++) instructions[i] = 32'd0;
+            instructions[2] = ITYPE(6'b101011, 5'd1, 5'd0, 16'd0);    // sw R0, 0(R1)
+            instructions[3] = ITYPE(6'b101011, 5'd5, 5'd0, 16'd0);    // sw R0, 0(R5)
+
+            instructions[4] = ATYPE(6'b010111, 5'd1, 5'd0, 5'd2, 6'b000010); // lr.w R2, (R1)
+            instructions[5] = ITYPE(6'b000101, 5'd2, 5'd0, 16'hFFFE);        // bne R2, R0, -2
+            instructions[6] = ITYPE(6'b001000, 5'd0, 5'd3, 16'd1);           // addi R3, R0, 1
+            instructions[7] = ATYPE(6'b010111, 5'd1, 5'd3, 5'd3, 6'b000011); // sc.w R3, (R1)
+            instructions[8] = ITYPE(6'b000101, 5'd3, 5'd0, 16'hFFFB);        // bne R3, R0, -5
+            
+            instructions[9] = ITYPE(6'b100011, 5'd5, 5'd4, 16'd0);           // lw R4, 0(R5)
+            instructions[10] = ITYPE(6'b001000, 5'd4, 5'd4, 16'd1);          // addi R4, R4, 1
+            instructions[11] = ITYPE(6'b101011, 5'd5, 5'd4, 16'd0);          // sw R4, 0(R5)
+            instructions[12] = ITYPE(6'b101011, 5'd1, 5'd0, 16'd0);          // sw R0, 0(R1)
+
+            for (int i = 13; i < 16; i++) instructions[i] = 32'd0;
 
         $display("   Starting Dual-Core Spinlock Test...  ");
 
         #20 rst = 0;
 
-        // زمان اجرای تست رو از 50 چرخه بیشتر می‌کنیم تا درگیری کش‌ها کامل انجام بشه
         repeat(250) @(posedge clk);
 
         $display(" Integration Test Finished! Check Waveforms ");

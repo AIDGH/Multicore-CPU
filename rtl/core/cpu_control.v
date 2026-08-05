@@ -17,7 +17,8 @@ module cpu_control (
     output reg       is_lr,
     output reg       is_sc,
     output reg       is_amoadd,
-    output reg       is_cpuid
+    output reg       is_cpuid,
+    output reg       is_bne
 );
     timeunit 1ns;
     timeprecision 1ps;
@@ -29,6 +30,7 @@ module cpu_control (
     localparam OP_LW    = 6'b100011;
     localparam OP_SW    = 6'b101011;
     localparam OP_BEQ   = 6'b000100;
+    localparam OP_BNE   = 6'b000101;
     localparam OP_J     = 6'b000010;
     localparam OP_JAL   = 6'b000011;
     
@@ -53,7 +55,7 @@ module cpu_control (
         RegDst=2'd0; RegWrite=1'b0; ALUSrc=1'b0; MemtoReg=2'd0;
         MemRead=1'b0; MemWrite=1'b0; Branch=1'b0; Jump=1'b0;
         Jal=1'b0; JumpReg=1'b0; ALUOp=ALU_ADD; is_muldiv=1'b0; is_div=1'b0;
-        is_lr=1'b0; is_sc=1'b0; is_amoadd=1'b0; is_cpuid=1'b0;
+        is_lr=1'b0; is_sc=1'b0; is_amoadd=1'b0; is_cpuid=1'b0; is_bne=1'b0;
 
         case (opcode)
             OP_RTYPE: begin
@@ -79,6 +81,9 @@ module cpu_control (
             end
             OP_BEQ: begin
                 ALUSrc=1'b0; ALUOp=ALU_SUB; Branch=1'b1;
+            end
+            OP_BNE: begin
+                ALUSrc=1'b0; ALUOp=ALU_SUB; Branch=1'b1; is_bne=1'b1;
             end
             OP_J:   begin Jump=1'b1; end
             OP_JAL: begin

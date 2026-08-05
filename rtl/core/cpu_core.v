@@ -37,7 +37,7 @@ module cpu_core (
     wire [1:0] RegDst, MemtoReg, ALUOp;
     wire       RegWrite, ALUSrc, MemRead, MemWrite;
     wire       Branch, Jump, Jal, JumpReg, is_muldiv, is_div;
-    wire       is_lr, is_sc, is_amoadd, is_cpuid;
+    wire       is_lr, is_sc, is_amoadd, is_cpuid, is_bne;
 
     cpu_control u_ctrl (
         .opcode(opcode), .funct(funct),
@@ -45,7 +45,7 @@ module cpu_core (
         .MemtoReg(MemtoReg), .MemRead(MemRead), .MemWrite(MemWrite),
         .Branch(Branch), .Jump(Jump), .Jal(Jal), .JumpReg(JumpReg),
         .ALUOp(ALUOp), .is_muldiv(is_muldiv), .is_div(is_div),
-        .is_lr(is_lr), .is_sc(is_sc), .is_amoadd(is_amoadd), .is_cpuid(is_cpuid)
+        .is_lr(is_lr), .is_sc(is_sc), .is_amoadd(is_amoadd), .is_cpuid(is_cpuid), .is_bne(is_bne)
     );
 
     wire [31:0] md_result;
@@ -104,16 +104,18 @@ module cpu_core (
     wire sc_response_success = 
         memory_response_complete & mem_req_is_sc;
 
+    wire final_sc_success = reserve_valid & (reserve_addr == mem_req_addr) & ~cancel_reservation;
+
     wire [31:0] regs_o [0:31];
     wire [4:0]  normal_write_reg = (RegDst == 2'd1) ? rd :
                                    (RegDst == 2'd2) ? 5'd31 : rt;
     wire [4:0]  write_reg = (load_response_success | sc_response_success) ? mem_load_dest
                                                   : normal_write_reg;
-    wire [31:0] normal_write_data;
     
+    wire [31:0] normal_write_data;
     wire [31:0] write_data = is_cpuid ? {31'b0, core_id} :
                              (is_sc && sc_fail_local && mem_state == MEM_IDLE) ? 32'd1 :
-                             sc_response_success ? 32'd0 :
+                             sc_response_success ? (final_sc_success ? 32'd0 : 32'd1) :
                              load_response_success ? data_rsp_rdata
                                                    : normal_write_data;
 
@@ -155,12 +157,13 @@ module cpu_core (
 
     assign InstrAddr = PC >> 2;
 
+    wire branch_taken = Branch & (is_bne ? ~zero : zero);
     wire [31:0] branch_target = pc_plus_4 + (imm_sext << 2);
     wire [31:0] jump_target   = {PC[31:28], addr26, 2'b00};
-    wire [31:0] next_pc = JumpReg         ? rs_val        :
-                          Jump            ? jump_target   :
-                          (Branch & zero) ? branch_target :
-                                            pc_plus_4;
+    wire [31:0] next_pc = JumpReg      ? rs_val        :
+                          Jump         ? jump_target   :
+                          branch_taken ? branch_target :
+                                         pc_plus_4;
 
     always @(posedge Clk or posedge Rst) begin
         if (Rst) begin
