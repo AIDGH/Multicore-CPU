@@ -3,3 +3,5 @@ build/
 *.vcd
 *.fst
 *.log
+.DS_Store
+*.zip
