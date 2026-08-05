@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+import mc_defs_pkg::*;
 
 module tb_l1_cache_mesi;
 
@@ -17,7 +18,7 @@ module tb_l1_cache_mesi;
     logic        data_req_valid;
     logic        data_req_ready;
     logic [31:0] data_req_addr;
-    logic [2:0] data_req_op;
+    logic [2:0]  data_req_op;
     logic [31:0] data_req_wdata;
     logic        data_rsp_valid;
     logic [31:0] data_rsp_rdata;
@@ -26,16 +27,20 @@ module tb_l1_cache_mesi;
 
     // Bus Interface
     logic        bus_req;
-    logic        bus_req_rdx;
+    mc_bus_txn_t bus_req_txn;
     logic [31:0] bus_req_addr;
+    logic [127:0] bus_req_wdata;
     logic        bus_gnt;
     logic        bus_rsp_valid;
     logic [127:0] bus_rsp_rdata;
+    logic        bus_rsp_shared;
+    logic        bus_rsp_error;
 
     // Snoop Interface
     logic        snoop_valid;
+    mc_bus_txn_t snoop_txn;
     logic [31:0] snoop_addr;
-    logic        snoop_rdx;
+    logic        snoop_rsp_valid;
     logic        snoop_shared;
     logic        snoop_flush;
     logic [127:0] snoop_wdata;
@@ -88,6 +93,8 @@ module tb_l1_cache_mesi;
         bus_gnt = 0;
         bus_rsp_valid = 0;
         bus_rsp_rdata = '0;
+        bus_rsp_shared = 0;
+        bus_rsp_error = 0;
         forever begin
             @(posedge clk);
             if (bus_req) begin
@@ -95,7 +102,7 @@ module tb_l1_cache_mesi;
                 repeat(2) @(posedge clk);
                 bus_gnt = 1'b1;
                 $display("[%0t] BUS ARB   | Granted to Cache | Type: %s | Addr: 0x%0h", 
-                         $time, bus_req_rdx ? "BusRdX" : "BusRd", bus_req_addr);
+                         $time, (bus_req_txn == MC_BUS_RDX) ? "BusRdX" : "BusRd", bus_req_addr);
                 @(posedge clk);
                 bus_gnt = 0;
                 
@@ -106,6 +113,7 @@ module tb_l1_cache_mesi;
                 bus_rsp_rdata = {32'hDDDD_DDDD, 32'hCCCC_CCCC, 32'hBBBB_BBBB, 32'hAAAA_AAAA};
                 @(posedge clk);
                 bus_rsp_valid = 0;
+                bus_rsp_shared = 0; // Reset shared flag
             end
         end
     end
@@ -120,7 +128,7 @@ module tb_l1_cache_mesi;
         data_req_valid = 0;
         snoop_valid = 0;
         snoop_addr = 0;
-        snoop_rdx = 0;
+        snoop_txn = MC_BUS_RD;
 
         $display("========================================");
         $display("   Starting MESI L1 Cache Unit Test     ");
@@ -135,8 +143,7 @@ module tb_l1_cache_mesi;
         // Scenario 1: Clean Miss -> Transition to E
         // ---------------------------------------------------------
         $display("\n--- SCENARIO 1: Clean Read Miss (I -> E) ---");
-        // No other cache shares this line
-        force dut.snoop_shared = 1'b0; 
+        // FIX: Removed force. Default bus_rsp_shared is 0.
         cpu_read(32'h0000_1000);
 
         // ---------------------------------------------------------
@@ -146,13 +153,13 @@ module tb_l1_cache_mesi;
         // Should happen immediately without bus request
         cpu_write(32'h0000_1004, 32'h1234_5678);
 
-// ---------------------------------------------------------
+        // ---------------------------------------------------------
         // Scenario 3: Snoop Write from other core (M -> I)
         // ---------------------------------------------------------
         $display("\n--- SCENARIO 3: Remote Write Invalidation (M -> I) ---");
         @(posedge clk);
         snoop_valid = 1'b1;
-        snoop_rdx   = 1'b1; // Other core wants to write
+        snoop_txn   = MC_BUS_RDX; // Other core wants to write
         snoop_addr  = 32'h0000_1008; // Same block
         
         #1; // Wait 1ps for combinational logic to update
@@ -166,9 +173,8 @@ module tb_l1_cache_mesi;
         // Scenario 4: Shared Miss -> Transition to S
         // ---------------------------------------------------------
         $display("\n--- SCENARIO 4: Shared Read Miss (I -> S) ---");
-        // Pretend the other cache already has this data
-        release dut.snoop_shared;
-        force dut.snoop_shared = 1'b1; 
+        // FIX: Simulate bus finding shared data normally
+        bus_rsp_shared = 1'b1; 
         cpu_read(32'h0000_2000);
 
         // ---------------------------------------------------------
@@ -184,7 +190,15 @@ module tb_l1_cache_mesi;
         $display("   Hits: %0d, Misses: %0d               ", dut.cnt_hits, dut.cnt_misses);
         $display("   Transitions: %0d, Flushes: %0d       ", dut.cnt_state_transitions, dut.cnt_flushes);
         $display("========================================");
-        $finish;
+        
+        // FIX: Self-Checking Assertion
+        if (dut.cnt_hits > 0 && dut.cnt_misses == 2) begin
+            $display("PASS: MESI Cache Unit Test Completed Successfully!");
+            $finish;
+        end else begin
+            $display("FAIL: MESI Cache Unit Test Failed. Incorrect Hits/Misses!");
+            $fatal;
+        end
     end
 
 endmodule

@@ -21,24 +21,22 @@ module l1_cache_mesi #(
     output logic        cancel_reservation,
 
     output logic        bus_req,
-    output logic        bus_req_rdx,
+    output mc_bus_txn_t bus_req_txn,    // FIX: Using actual transaction type for Write-Back
     output logic [31:0] bus_req_addr,
+    output logic [127:0] bus_req_wdata,
     input  logic        bus_gnt,
     input  logic        bus_rsp_valid,
     input  logic [127:0] bus_rsp_rdata,
-
-    input  logic        snoop_valid,
-    input  logic [31:0] snoop_addr,
-    input  logic        snoop_rdx,
-    output logic        snoop_shared,
-    output logic        snoop_flush,
-    output logic [127:0] snoop_wdata,
-
-    output logic [127:0] bus_req_wdata,
     input  logic         bus_rsp_shared,
     input  logic         bus_rsp_error,
-    input  mc_bus_txn_t  snoop_txn,
-    output logic         snoop_rsp_valid
+
+    input  logic        snoop_valid,
+    input  mc_bus_txn_t snoop_txn,
+    input  logic [31:0] snoop_addr,
+    output logic        snoop_rsp_valid,
+    output logic        snoop_shared,
+    output logic        snoop_flush,
+    output logic [127:0] snoop_wdata
 );
 
     localparam TAG_BITS = 32 - INDEX_BITS - 4;
@@ -116,78 +114,30 @@ module l1_cache_mesi #(
 
     wire snoop_hit = snoop_valid && (state_array[snoop_index] != STATE_I) && (tag_array[snoop_index] == snoop_tag);
 
+    assign snoop_rsp_valid = snoop_valid; // FIX: Direct acknowledge
     assign snoop_shared = snoop_hit;
     assign snoop_flush  = snoop_hit && (state_array[snoop_index] == STATE_M);
     assign snoop_wdata  = data_array[snoop_index];
 
-    assign cancel_reservation = snoop_hit && snoop_rdx;
+    assign cancel_reservation = snoop_hit && (snoop_txn == MC_BUS_RDX || snoop_txn == MC_BUS_WRITEBACK);
 
-    always_ff @(posedge clk or negedge rst_n) begin
-            if (!rst_n) begin
-                cnt_flushes <= '0;
-                cnt_invalidations <= '0;
-                for (int i = 0; i < LINE_COUNT; i++) begin
-                    state_array[i] <= STATE_I;
-                    tag_array[i] <= '0;
-                    data_array[i] <= '0;
-                end
-            end else begin
-                if (fsm_state == C_BUS_WAIT && bus_rsp_valid && !bus_rsp_error) begin
-                    tag_array[req_index] <= req_tag;
-                    if (is_read) begin
-                        data_array[req_index]  <= bus_rsp_rdata;
-                        if (bus_rsp_shared) state_array[req_index] <= STATE_S;
-                        else                state_array[req_index] <= STATE_E;
-                    end else if (is_amo) begin
-                        data_array[req_index] <= replace_word(bus_rsp_rdata, req_word, get_word(bus_rsp_rdata, req_word) + req_wdata_reg);
-                        state_array[req_index] <= STATE_M;
-                    end else begin
-                        data_array[req_index] <= replace_word(bus_rsp_rdata, req_word, req_wdata_reg);
-                        state_array[req_index] <= STATE_M;
-                    end
-                end else if (fsm_state == C_LOOKUP && is_hit) begin
-                    if (!is_read) begin
-                        if (state_array[req_index] == STATE_S || state_array[req_index] == STATE_E) begin
-                            state_array[req_index] <= STATE_M;
-                        end
-                        if (is_amo) begin
-                            data_array[req_index] <= replace_word(data_array[req_index], req_word, get_word(data_array[req_index], req_word) + req_wdata_reg);
-                        end else begin
-                            data_array[req_index] <= replace_word(data_array[req_index], req_word, req_wdata_reg);
-                        end
-                    end
-                end
-
-                if (snoop_hit) begin
-                    if (snoop_rdx) begin
-                        if (state_array[snoop_index] == STATE_M) cnt_flushes <= cnt_flushes + 1;
-                        state_array[snoop_index] <= STATE_I;
-                        cnt_invalidations <= cnt_invalidations + 1;
-                    end else begin
-                        if (state_array[snoop_index] == STATE_M) begin
-                            cnt_flushes <= cnt_flushes + 1;
-                            state_array[snoop_index] <= STATE_S;
-                        end else if (state_array[snoop_index] == STATE_E) begin
-                            state_array[snoop_index] <= STATE_S;
-                        end
-                    end
-                end
-            end
-        end
-
+    // FIX: Single Unified Sequential Block to prevent Multiple Drivers Race Condition
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             fsm_state <= C_IDLE;
             data_req_ready <= 1'b1; data_rsp_valid <= 1'b0; data_rsp_error <= 1'b0;
-            bus_req <= 1'b0;
-            cnt_hits <= '0; cnt_misses <= '0; cnt_state_transitions <= '0;
+            bus_req <= 1'b0; bus_req_txn <= MC_BUS_RD;
+            cnt_hits <= '0; cnt_misses <= '0; cnt_flushes <= '0; cnt_invalidations <= '0; cnt_state_transitions <= '0;
             for (int i = 0; i < LINE_COUNT; i++) begin
                 state_array[i] <= STATE_I; tag_array[i] <= '0; data_array[i] <= '0;
             end
         end else begin
+            
+            // --- 1. FSM Processing ---
             case (fsm_state)
                 C_IDLE: begin
                     data_rsp_valid <= 1'b0;
+                    data_rsp_error <= 1'b0;
                     data_req_ready <= 1'b1;
                     if (data_req_valid) begin
                         req_addr_reg   <= data_req_addr;
@@ -199,58 +149,56 @@ module l1_cache_mesi #(
                 end
 
                 C_LOOKUP: begin
-                                    if (is_hit) begin
-                                        if (is_read) begin
-                                            data_rsp_rdata <= get_word(data_array[req_index], req_word);
-                                            data_rsp_valid <= 1'b1;
-                                            cnt_hits       <= cnt_hits + 1;
-                                            fsm_state      <= C_RESPONSE;
-                                        end else begin
-                                            if (state_array[req_index] == STATE_M || state_array[req_index] == STATE_E) begin
-                                                if (is_amo) begin
-                                                    data_rsp_rdata <= get_word(data_array[req_index], req_word);
-                                                    data_array[req_index] <= replace_word(data_array[req_index], req_word, get_word(data_array[req_index], req_word) + req_wdata_reg);
-                                                end else begin
-                                                    data_array[req_index] <= replace_word(data_array[req_index], req_word, req_wdata_reg);
-                                                end
-                                                state_array[req_index] <= STATE_M;
-                                                data_rsp_valid         <= 1'b1;
-                                                cnt_hits               <= cnt_hits + 1;
-                                                cnt_state_transitions  <= cnt_state_transitions + 1;
-                                                fsm_state              <= C_RESPONSE;
-                                            end else begin
-                                                bus_req      <= 1'b1;
-                                                bus_req_rdx  <= 1'b1;
-                                                bus_req_addr <= req_addr_reg;
-                                                fsm_state    <= C_BUS_REQ;
-                                            end
-                                        end
-                                    end else begin
-                                        cnt_misses <= cnt_misses + 1;
-                                        if (line_valid && state_array[req_index] == STATE_M) begin
-                                            bus_req       <= 1'b1;
-                                            bus_req_rdx   <= 1'b1;
-                                            bus_req_addr  <= {tag_array[req_index], req_index, 4'b0000};
-                                            //bus_req_wdata <= data_array[req_index];
-                                            fsm_state     <= C_WRITEBACK;
-                                        end else begin
-                                            bus_req      <= 1'b1;
-                                            bus_req_rdx  <= needs_exclusive;
-                                            bus_req_addr <= req_addr_reg;
-                                            fsm_state    <= C_BUS_REQ;
-                                        end
-                                    end
+                    if (is_hit) begin
+                        if (is_read) begin
+                            data_rsp_rdata <= get_word(data_array[req_index], req_word);
+                            data_rsp_valid <= 1'b1;
+                            cnt_hits       <= cnt_hits + 1;
+                            fsm_state      <= C_RESPONSE;
+                        end else begin
+                            if (state_array[req_index] == STATE_M || state_array[req_index] == STATE_E) begin
+                                if (is_amo) begin
+                                    data_rsp_rdata <= get_word(data_array[req_index], req_word);
+                                    data_array[req_index] <= replace_word(data_array[req_index], req_word, get_word(data_array[req_index], req_word) + req_wdata_reg);
+                                end else begin
+                                    data_array[req_index] <= replace_word(data_array[req_index], req_word, req_wdata_reg);
                                 end
+                                state_array[req_index] <= STATE_M;
+                                data_rsp_valid         <= 1'b1;
+                                cnt_hits               <= cnt_hits + 1;
+                                cnt_state_transitions  <= cnt_state_transitions + 1;
+                                fsm_state              <= C_RESPONSE;
+                            end else begin
+                                bus_req      <= 1'b1;
+                                bus_req_txn  <= MC_BUS_RDX;
+                                bus_req_addr <= req_addr_reg;
+                                fsm_state    <= C_BUS_REQ;
+                            end
+                        end
+                    end else begin
+                        cnt_misses <= cnt_misses + 1;
+                        if (line_valid && state_array[req_index] == STATE_M) begin
+                            bus_req       <= 1'b1;
+                            bus_req_txn   <= MC_BUS_WRITEBACK; // FIX: Correct transaction type
+                            bus_req_addr  <= {tag_array[req_index], req_index, 4'b0000};
+                            fsm_state     <= C_WRITEBACK;
+                        end else begin
+                            bus_req      <= 1'b1;
+                            bus_req_txn  <= needs_exclusive ? MC_BUS_RDX : MC_BUS_RD;
+                            bus_req_addr <= req_addr_reg;
+                            fsm_state    <= C_BUS_REQ;
+                        end
+                    end
+                end
 
-                                C_WRITEBACK: begin
-                                    if (bus_gnt) begin
-                                        bus_req       <= 1'b0;
-                                        bus_req       <= 1'b1;
-                                        bus_req_rdx   <= needs_exclusive;
-                                        bus_req_addr  <= req_addr_reg;
-                                        fsm_state     <= C_BUS_REQ;
-                                    end
-                                end
+                C_WRITEBACK: begin
+                    if (bus_gnt) begin
+                        bus_req       <= 1'b1;
+                        bus_req_txn   <= needs_exclusive ? MC_BUS_RDX : MC_BUS_RD;
+                        bus_req_addr  <= req_addr_reg;
+                        fsm_state     <= C_BUS_REQ;
+                    end
+                end
 
                 C_BUS_REQ: begin
                     if (bus_gnt) fsm_state <= C_BUS_WAIT;
@@ -271,6 +219,7 @@ module l1_cache_mesi #(
 
                             if (is_read) begin
                                 data_array[req_index]  <= safe_rsp_data;
+                                // FIX: Use correct bus_rsp_shared signal
                                 if (bus_rsp_shared) state_array[req_index] <= STATE_S;
                                 else                state_array[req_index] <= STATE_E;
                                 data_rsp_rdata <= get_word(safe_rsp_data, req_word);
@@ -294,6 +243,23 @@ module l1_cache_mesi #(
 
                 default: fsm_state <= C_IDLE;
             endcase
+
+            // --- 2. Snoop Processing ---
+            // Snoop can safely override the state array safely in the same clock cycle if hit
+            if (snoop_hit) begin
+                if (snoop_txn == MC_BUS_RDX) begin
+                    if (state_array[snoop_index] == STATE_M) cnt_flushes <= cnt_flushes + 1;
+                    state_array[snoop_index] <= STATE_I;
+                    cnt_invalidations <= cnt_invalidations + 1;
+                end else if (snoop_txn == MC_BUS_RD) begin
+                    if (state_array[snoop_index] == STATE_M) begin
+                        cnt_flushes <= cnt_flushes + 1;
+                        state_array[snoop_index] <= STATE_S;
+                    end else if (state_array[snoop_index] == STATE_E) begin
+                        state_array[snoop_index] <= STATE_S;
+                    end
+                end
+            end
         end
     end
 endmodule
