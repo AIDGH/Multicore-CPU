@@ -68,10 +68,12 @@ module l1_cache_mesi #(
     logic [31:0] req_addr_reg;
     logic [2:0]  req_op_reg;
     logic [31:0] req_wdata_reg;
+    logic        sc_cancelled;
 
     wire is_read  = (req_op_reg == OP_LOAD)  || (req_op_reg == OP_LR);
     wire is_write = (req_op_reg == OP_STORE) || (req_op_reg == OP_SC);
     wire is_amo   = (req_op_reg == OP_AMOADD);
+    wire is_sc    = (req_op_reg == OP_SC);
     wire needs_exclusive = is_write || is_amo;
 
     logic [31:0] cnt_hits, cnt_misses, cnt_flushes, cnt_invalidations, cnt_state_transitions;
@@ -119,14 +121,26 @@ module l1_cache_mesi #(
     assign snoop_flush  = snoop_hit && (state_array[snoop_index] == STATE_M);
     assign snoop_wdata  = data_array[snoop_index];
 
-    assign cancel_reservation = snoop_hit && (snoop_txn == MC_BUS_RDX || snoop_txn == MC_BUS_WRITEBACK);
+    wire pending_sc_request = (fsm_state != C_IDLE) && (req_op_reg == OP_SC);
+    wire accepting_sc_request = (fsm_state == C_IDLE) && data_req_valid &&
+                                (data_req_op == OP_SC);
+    wire sc_snoop_conflict = snoop_valid && (snoop_txn == MC_BUS_RDX) &&
+                             ((pending_sc_request &&
+                               (req_addr_reg[31:4] == snoop_addr[31:4])) ||
+                              (accepting_sc_request &&
+                               (data_req_addr[31:4] == snoop_addr[31:4])));
+    wire sc_abort_now = is_sc && (sc_cancelled || sc_snoop_conflict);
+
+    assign cancel_reservation = snoop_hit && (snoop_txn == MC_BUS_RDX);
 
     // FIX: Single Unified Sequential Block to prevent Multiple Drivers Race Condition
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             fsm_state <= C_IDLE;
             data_req_ready <= 1'b1; data_rsp_valid <= 1'b0; data_rsp_error <= 1'b0;
+            data_rsp_rdata <= 32'd0;
             bus_req <= 1'b0; bus_req_txn <= MC_BUS_RD;
+            sc_cancelled <= 1'b0;
             cnt_hits <= '0; cnt_misses <= '0; cnt_flushes <= '0; cnt_invalidations <= '0; cnt_state_transitions <= '0;
             for (int i = 0; i < LINE_COUNT; i++) begin
                 state_array[i] <= STATE_I; tag_array[i] <= '0; data_array[i] <= '0;
@@ -143,6 +157,7 @@ module l1_cache_mesi #(
                         req_addr_reg   <= data_req_addr;
                         req_op_reg     <= data_req_op;
                         req_wdata_reg  <= data_req_wdata;
+                        sc_cancelled   <= 1'b0;
                         data_req_ready <= 1'b0;
                         fsm_state      <= C_LOOKUP;
                     end
@@ -157,17 +172,31 @@ module l1_cache_mesi #(
                             fsm_state      <= C_RESPONSE;
                         end else begin
                             if (state_array[req_index] == STATE_M || state_array[req_index] == STATE_E) begin
-                                if (is_amo) begin
-                                    data_rsp_rdata <= get_word(data_array[req_index], req_word);
-                                    data_array[req_index] <= replace_word(data_array[req_index], req_word, get_word(data_array[req_index], req_word) + req_wdata_reg);
+                                if (is_sc && sc_abort_now) begin
+                                    data_rsp_rdata <= 32'd1;
                                 end else begin
-                                    data_array[req_index] <= replace_word(data_array[req_index], req_word, req_wdata_reg);
+                                    if (is_amo) begin
+                                        data_rsp_rdata <= get_word(data_array[req_index], req_word);
+                                        data_array[req_index] <= replace_word(
+                                            data_array[req_index],
+                                            req_word,
+                                            get_word(data_array[req_index], req_word) + req_wdata_reg
+                                        );
+                                    end else begin
+                                        data_array[req_index] <= replace_word(
+                                            data_array[req_index],
+                                            req_word,
+                                            req_wdata_reg
+                                        );
+                                        if (is_sc)
+                                            data_rsp_rdata <= 32'd0;
+                                    end
+                                    state_array[req_index] <= STATE_M;
+                                    cnt_state_transitions <= cnt_state_transitions + 1;
                                 end
-                                state_array[req_index] <= STATE_M;
-                                data_rsp_valid         <= 1'b1;
-                                cnt_hits               <= cnt_hits + 1;
-                                cnt_state_transitions  <= cnt_state_transitions + 1;
-                                fsm_state              <= C_RESPONSE;
+                                data_rsp_valid <= 1'b1;
+                                cnt_hits       <= cnt_hits + 1;
+                                fsm_state      <= C_RESPONSE;
                             end else begin
                                 bus_req      <= 1'b1;
                                 bus_req_txn  <= MC_BUS_RDX;
@@ -232,6 +261,12 @@ module l1_cache_mesi #(
                                     get_word(safe_rsp_data, req_word) + req_wdata_reg
                                 );
                                 state_array[req_index] <= STATE_M;
+                            end else if (is_sc && sc_abort_now) begin
+                                // The reservation was invalidated before this SC committed.
+                                // Keep the freshly acquired line clean and report failure.
+                                data_array[req_index] <= safe_rsp_data;
+                                state_array[req_index] <= STATE_E;
+                                data_rsp_rdata <= 32'd1;
                             end else begin
                                 data_array[req_index] <= replace_word(
                                     safe_rsp_data,
@@ -239,6 +274,8 @@ module l1_cache_mesi #(
                                     req_wdata_reg
                                 );
                                 state_array[req_index] <= STATE_M;
+                                if (is_sc)
+                                    data_rsp_rdata <= 32'd0;
                             end
 
                             cnt_state_transitions <= cnt_state_transitions + 1;
@@ -259,6 +296,9 @@ module l1_cache_mesi #(
 
             // --- 2. Snoop Processing ---
             // Snoop can safely override the state array safely in the same clock cycle if hit
+            if (sc_snoop_conflict)
+                sc_cancelled <= 1'b1;
+
             if (snoop_hit) begin
                 if (snoop_txn == MC_BUS_RDX) begin
                     if (state_array[snoop_index] == STATE_M) cnt_flushes <= cnt_flushes + 1;

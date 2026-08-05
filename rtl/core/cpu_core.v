@@ -104,7 +104,7 @@ module cpu_core (
     wire sc_response_success = 
         memory_response_complete & mem_req_is_sc;
 
-    wire final_sc_success = reserve_valid & (reserve_addr == mem_req_addr) & ~cancel_reservation;
+    wire final_sc_success = sc_response_success & (data_rsp_rdata == 32'd0);
 
     wire [31:0] regs_o [0:31];
     wire [4:0]  normal_write_reg = (RegDst == 2'd1) ? rd :
@@ -220,6 +220,9 @@ module cpu_core (
             reserve_valid <= 1'b0;
             reserve_addr <= 32'b0;
         end else if (cancel_reservation) begin
+            reserve_valid <= 1'b0;
+        end else if ((mem_state == MEM_IDLE) && memory_instruction && !is_sc) begin
+            // Any intervening local memory operation may discard the LR reservation.
             reserve_valid <= 1'b0;
         end else if (load_response_success && mem_req_op_reg == MC_MEM_LR) begin
             reserve_valid <= 1'b1;

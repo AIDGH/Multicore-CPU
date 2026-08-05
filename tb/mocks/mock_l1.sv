@@ -96,14 +96,14 @@ module mock_l1 (
                     if (completion_count != 8'd0) begin
                         completion_count <= completion_count - 8'd1;
                     end else begin
-                        response_read_data <= selected_response_data;
-
                         if (accepted_op == MC_MEM_SC) begin
+                            response_read_data <= selected_sc_success ? 32'd0 : 32'd1;
                             if (selected_sc_success)
                                 response_status <= MC_RESP_SC_SUCCESS;
                             else
                                 response_status <= MC_RESP_SC_FAILURE;
                         end else begin
+                            response_read_data <= selected_response_data;
                             response_status <= MC_RESP_OK;
                         end
 

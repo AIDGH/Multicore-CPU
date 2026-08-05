@@ -307,6 +307,12 @@ module tb_l1_cache_mesi;
             32'h0000_0002,
             32'h0000_0001
         };
+        memory[8'h0D] = {
+            32'hDDDD_0004,
+            32'hDDDD_0003,
+            32'hDDDD_0002,
+            32'h1111_2222
+        };
 
         repeat (4) @(posedge clk);
         @(negedge clk);
@@ -369,6 +375,41 @@ module tb_l1_cache_mesi;
                         "store upgrade did not update the cache line");
         check_condition(dut.state_array[12] == STATE_M,
                         "store upgrade did not enter M");
+
+        // A remote BusRdX that arrives before an SC commits must make the
+        // SC fail without changing the target word.
+        next_read_shared = 1'b1;
+        issue_request(OP_LOAD, 32'h0000_00D0, 32'd0, response_data);
+        next_read_shared = 1'b0;
+        check_condition(dut.state_array[13] == STATE_S,
+                        "SC cancellation setup did not leave the line in S");
+
+        fork
+            begin : issue_cancelled_sc
+                issue_request(OP_SC, 32'h0000_00D0, 32'hCAFE_BABE, response_data);
+            end
+            begin : invalidate_pending_sc
+                wait (bus_req && (bus_req_txn == MC_BUS_RDX) &&
+                      (bus_req_addr[31:4] == 28'h000000D));
+                @(negedge clk);
+                snoop_valid = 1'b1;
+                snoop_txn = MC_BUS_RDX;
+                snoop_addr = 32'h0000_00D0;
+                #1;
+                check_condition(cancel_reservation,
+                                "pending SC invalidation did not cancel the reservation");
+                @(posedge clk);
+                @(negedge clk);
+                snoop_valid = 1'b0;
+            end
+        join
+
+        check_condition(response_data == 32'd1,
+                        "cancelled SC did not return architectural failure (1)");
+        check_condition(line_word(dut.data_array[13], 2'd0) == 32'h1111_2222,
+                        "cancelled SC modified the cache line");
+        check_condition(dut.state_array[13] == STATE_E,
+                        "cancelled SC did not retain a clean exclusive line");
 
         @(negedge clk);
         snoop_valid = 1'b1;

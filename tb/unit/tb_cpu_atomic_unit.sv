@@ -206,15 +206,22 @@ module tb_cpu_atomic_unit;
 
         while (instr_addr != 32'd8) @(negedge clk);
 
+        // Configure the accepted SC to fail, then invalidate the reservation
+        // while the request is still in flight.  The CPU must consume the
+        // cache's architectural 0/1 result rather than reporting a stale
+        // success from its local reservation bit.
+        l1_cfg_sc_success = 1'b0;
+
+        while (instr_addr != 32'd9) @(negedge clk);
+        while (!(data_req_valid && data_req_op == 3'd3)) @(negedge clk);
         cancel_reservation = 1'b1;
         @(negedge clk);
         cancel_reservation = 1'b0;
 
-        while (instr_addr != 32'd9) @(negedge clk);
-
         while (instr_addr != 32'd10) @(negedge clk);
 
-        check_condition(R[9] == 32'd1, "SC.W did not return failure (1) after cancel_reservation");
+        check_condition(R[9] == 32'd1,
+                        "in-flight SC.W did not return failure (1) after invalidation");
 
         if (error_count == 0) begin
             $display("PASS: tb_cpu_atomic_unit");
