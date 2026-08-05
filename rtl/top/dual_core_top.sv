@@ -54,7 +54,6 @@ module dual_core_top #(
     // Cache 0 <-> Bus Interconnect Wires
     // =========================================================
     logic         c0_bus_req;
-    logic         c0_bus_req_rdx;
     logic [31:0]  c0_bus_req_addr;
     logic [127:0] c0_bus_req_wdata;   // Added: Write-Back Data
     logic         c0_bus_gnt;
@@ -66,7 +65,6 @@ module dual_core_top #(
     logic         c0_snoop_valid;
     mc_bus_txn_t  c0_snoop_txn;       // Added: Snoop Transaction Type
     logic [31:0]  c0_snoop_addr;
-    logic         c0_snoop_rdx;
     logic         c0_snoop_shared;
     logic         c0_snoop_flush;
     logic [127:0] c0_snoop_wdata;
@@ -78,7 +76,6 @@ module dual_core_top #(
     // Cache 1 <-> Bus Interconnect Wires
     // =========================================================
     logic         c1_bus_req;
-    logic         c1_bus_req_rdx;
     logic [31:0]  c1_bus_req_addr;
     logic [127:0] c1_bus_req_wdata;   // Added: Write-Back Data
     logic         c1_bus_gnt;
@@ -90,22 +87,12 @@ module dual_core_top #(
     logic         c1_snoop_valid;
     mc_bus_txn_t  c1_snoop_txn;       // Added: Snoop Transaction Type
     logic [31:0]  c1_snoop_addr;
-    logic         c1_snoop_rdx;
     logic         c1_snoop_shared;
     logic         c1_snoop_flush;
     logic [127:0] c1_snoop_wdata;
     logic         c1_snoop_rsp_valid; // Added: Snoop Ack
 
     mc_bus_txn_t  c1_bus_txn;
-
-    // Transaction Type Mapping
-    always_comb begin
-        if (c0_bus_req_rdx) c0_bus_txn = MC_BUS_RDX;
-        else                c0_bus_txn = MC_BUS_RD;
-
-        if (c1_bus_req_rdx) c1_bus_txn = MC_BUS_RDX;
-        else                c1_bus_txn = MC_BUS_RD;
-    end
 
     // Active-Low Reset for Cache Modules
     wire rst_n = ~rst;
@@ -182,7 +169,7 @@ module dual_core_top #(
         .cancel_reservation (c0_cancel_reservation),
 
         .bus_req            (c0_bus_req),
-        .bus_req_rdx        (c0_bus_req_rdx),
+        .bus_req_txn        (c0_bus_txn),
         .bus_req_addr       (c0_bus_req_addr),
         .bus_req_wdata      (c0_bus_req_wdata),   // Fixed
         .bus_gnt            (c0_bus_gnt),
@@ -194,7 +181,6 @@ module dual_core_top #(
         .snoop_valid        (c0_snoop_valid),
         .snoop_txn          (c0_snoop_txn),       // Fixed
         .snoop_addr         (c0_snoop_addr),
-        .snoop_rdx          (c0_snoop_rdx),
         .snoop_rsp_valid    (c0_snoop_rsp_valid), // Fixed
         .snoop_shared       (c0_snoop_shared),
         .snoop_flush        (c0_snoop_flush),
@@ -215,7 +201,7 @@ module dual_core_top #(
         .cancel_reservation (c1_cancel_reservation),
 
         .bus_req            (c1_bus_req),
-        .bus_req_rdx        (c1_bus_req_rdx),
+        .bus_req_txn        (c1_bus_txn),
         .bus_req_addr       (c1_bus_req_addr),
         .bus_req_wdata      (c1_bus_req_wdata),   // Fixed
         .bus_gnt            (c1_bus_gnt),
@@ -227,7 +213,6 @@ module dual_core_top #(
         .snoop_valid        (c1_snoop_valid),
         .snoop_txn          (c1_snoop_txn),       // Fixed
         .snoop_addr         (c1_snoop_addr),
-        .snoop_rdx          (c1_snoop_rdx),
         .snoop_rsp_valid    (c1_snoop_rsp_valid), // Fixed
         .snoop_shared       (c1_snoop_shared),
         .snoop_flush        (c1_snoop_flush),
@@ -287,8 +272,5 @@ module dual_core_top #(
         .cache1_snoop_rsp_data       (c1_snoop_wdata)
     );
 
-    // Snoop Read/Write type drive logic
-    assign c0_snoop_rdx = (c0_snoop_txn == MC_BUS_RDX);
-    assign c1_snoop_rdx = (c1_snoop_txn == MC_BUS_RDX);
 
 endmodule

@@ -85,6 +85,8 @@ module tb_cpu_memory_handshake;
     cpu_core dut (
         .Clk(clk),
         .Rst(rst),
+        .core_id(1'b0),
+        .cancel_reservation(1'b0),
         .InstrIn(instr_in),
         .InstrAddr(instr_addr),
         .data_req_valid(data_req_valid),
