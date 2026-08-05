@@ -149,6 +149,7 @@ module tb_shared_bus;
         integer memory_accept_before;
         integer response_0_before;
         integer response_1_before;
+        logic requires_snoop;
         logic [1:0] expected_ready_mask;
         logic [1:0] expected_snoop_mask;
         logic [1:0] expected_response_mask;
@@ -157,19 +158,31 @@ module tb_shared_bus;
         mc_line_mem_op_t expected_memory_op;
         logic [MC_ADDR_WIDTH-1:0] held_memory_address;
         logic [MC_LINE_WIDTH-1:0] held_memory_write_data;
+        logic [MC_LINE_WIDTH-1:0] dirty_peer_data;
+        logic [MC_LINE_WIDTH-1:0] expected_response_data;
+        logic [MC_LINE_WIDTH-1:0] expected_memory_write_data;
         begin
+            requires_snoop = (expected_txn != MC_BUS_WRITEBACK);
             expected_ready_mask = (expected_owner == 0) ? 2'b01 : 2'b10;
             expected_snoop_mask = (expected_owner == 0) ? 2'b10 : 2'b01;
             expected_response_mask = expected_ready_mask;
             expected_shared_mask =
-                peer_present ? expected_response_mask : 2'b00;
-            expected_error_mask =
-                (peer_dirty || expected_memory_error)
+                (requires_snoop && peer_present)
                 ? expected_response_mask : 2'b00;
+            expected_error_mask =
+                expected_memory_error ? expected_response_mask : 2'b00;
             expected_memory_op = mc_line_mem_op_t'(
-                (expected_txn == MC_BUS_WRITEBACK)
+                ((expected_txn == MC_BUS_WRITEBACK) || peer_dirty)
                 ? MC_LINE_WRITE : MC_LINE_READ
             );
+
+            dirty_peer_data = (expected_owner == 0)
+                ? 128'he100_e101_e102_e103_e104_e105_e106_e107
+                : 128'hd100_d101_d102_d103_d104_d105_d106_d107;
+            expected_response_data =
+                peer_dirty ? dirty_peer_data : expected_memory_data;
+            expected_memory_write_data =
+                peer_dirty ? dirty_peer_data : expected_write_data;
 
             memory_accept_before = memory_accept_count;
             response_0_before    = response_count_0;
@@ -191,207 +204,195 @@ module tb_shared_bus;
             check_owner(expected_owner);
             check_condition(l1_req_ready == 2'b00,
                             "request remained ready after capture");
-            check_condition(snoop_valid == expected_snoop_mask,
-                            "snoop was not sent only to the nonowner");
-            check_condition(snoop_txn == expected_txn,
-                            "captured snoop transaction type was incorrect");
-            check_condition(snoop_line_addr == expected_line_address,
-                            "captured snoop line address was incorrect");
-            check_condition(
-                snoop_requester_id == (expected_owner == 1),
-                "snoop requester identity was incorrect"
-            );
-            check_condition(!memory_req_valid,
-                            "downstream request started before snoop completion");
             check_condition(l1_rsp_valid == 2'b00,
-                            "owner response appeared before transaction completion");
+                            "owner response appeared before completion");
+
+            if (requires_snoop) begin
+                check_condition(snoop_valid == expected_snoop_mask,
+                                "snoop was not sent only to the nonowner");
+                check_condition(snoop_txn == expected_txn,
+                                "captured snoop transaction type was incorrect");
+                check_condition(snoop_line_addr == expected_line_address,
+                                "captured snoop line address was incorrect");
+                check_condition(
+                    snoop_requester_id == (expected_owner == 1),
+                    "snoop requester identity was incorrect"
+                );
+                check_condition(!memory_req_valid,
+                                "downstream request started before snoop completion");
+            end else begin
+                check_condition(snoop_valid == 2'b00,
+                                "write-back incorrectly snooped the peer");
+                check_condition(memory_req_valid,
+                                "write-back did not issue a direct memory request");
+            end
 
             @(negedge clk);
             l1_req_valid = requests_after_capture;
 
+            if (requires_snoop) begin
+                for (delay_index = 0;
+                     delay_index < snoop_delay;
+                     delay_index = delay_index + 1) begin
+                    @(posedge clk);
+                    #1;
+                    check_owner(expected_owner);
+                    check_condition(snoop_valid == expected_snoop_mask,
+                                    "snoop request changed before acknowledgement");
+                    check_condition(snoop_txn == expected_txn,
+                                    "snoop transaction changed before acknowledgement");
+                    check_condition(snoop_line_addr == expected_line_address,
+                                    "snoop address changed before acknowledgement");
+                    check_condition(!memory_req_valid,
+                                    "memory request preceded snoop acknowledgement");
+                    check_condition(l1_rsp_valid == 2'b00,
+                                    "response appeared before snoop acknowledgement");
+                end
+
+                @(negedge clk);
+                snoop_rsp_valid      = expected_snoop_mask;
+                snoop_rsp_present    = peer_present
+                                     ? expected_snoop_mask : 2'b00;
+                snoop_rsp_dirty      = peer_dirty
+                                     ? expected_snoop_mask : 2'b00;
+                snoop_rsp_data_valid = 2'b00;
+                snoop_rsp_data_0     =
+                    128'hd100_d101_d102_d103_d104_d105_d106_d107;
+                snoop_rsp_data_1     =
+                    128'he100_e101_e102_e103_e104_e105_e106_e107;
+
+                check_condition(!memory_req_valid,
+                                "memory request was active before snoop response");
+
+                if (peer_dirty) begin
+                    repeat (2) begin
+                        @(posedge clk);
+                        #1;
+                        check_owner(expected_owner);
+                        check_condition(snoop_valid == expected_snoop_mask,
+                                        "dirty snoop was not held while data was invalid");
+                        check_condition(snoop_txn == expected_txn,
+                                        "dirty snoop transaction changed while waiting for data");
+                        check_condition(snoop_line_addr == expected_line_address,
+                                        "dirty snoop address changed while waiting for data");
+                        check_condition(!memory_req_valid,
+                                        "dirty line was written before data-valid");
+                        check_condition(l1_rsp_valid == 2'b00,
+                                        "response appeared before dirty data-valid");
+                    end
+
+                    @(negedge clk);
+                    snoop_rsp_data_valid = expected_snoop_mask;
+                end
+
+                @(posedge clk);
+                #1;
+                check_owner(expected_owner);
+                check_condition(snoop_valid == 2'b00,
+                                "snoop remained active after complete acknowledgement");
+                check_condition(memory_req_valid,
+                                "memory request did not follow snoop completion");
+
+                @(negedge clk);
+                snoop_rsp_valid      = 2'b00;
+                snoop_rsp_present    = 2'b00;
+                snoop_rsp_dirty      = 2'b00;
+                snoop_rsp_data_valid = 2'b00;
+            end
+
+            check_condition(memory_req_valid,
+                            "downstream memory request was not asserted");
+            check_condition(memory_req_op == expected_memory_op,
+                            "downstream operation type was incorrect");
+            check_condition(memory_req_line_addr == expected_line_address,
+                            "downstream line address was incorrect");
+            check_condition(memory_req_wdata == expected_memory_write_data,
+                            "downstream write data was incorrect");
+            check_condition(l1_rsp_valid == 2'b00,
+                            "owner response appeared before memory completion");
+
+            held_memory_address    = memory_req_line_addr;
+            held_memory_write_data = memory_req_wdata;
+
             for (delay_index = 0;
-                 delay_index < snoop_delay;
+                 delay_index < memory_accept_delay;
                  delay_index = delay_index + 1) begin
                 @(posedge clk);
                 #1;
                 check_owner(expected_owner);
-                check_condition(snoop_valid == expected_snoop_mask,
-                                "snoop request changed while awaiting acknowledgement");
-                check_condition(snoop_txn == expected_txn,
-                                "snoop transaction changed before acknowledgement");
-                check_condition(snoop_line_addr == expected_line_address,
-                                "snoop address changed before acknowledgement");
-                check_condition(!memory_req_valid,
-                                "downstream request preceded snoop acknowledgement");
+                check_condition(memory_req_valid,
+                                "memory request_valid dropped before acceptance");
+                check_condition(memory_req_op == expected_memory_op,
+                                "memory operation changed before acceptance");
+                check_condition(memory_req_line_addr == held_memory_address,
+                                "memory address changed before acceptance");
+                check_condition(memory_req_wdata == held_memory_write_data,
+                                "memory write data changed before acceptance");
                 check_condition(l1_rsp_valid == 2'b00,
-                                "response appeared before snoop acknowledgement");
+                                "response appeared before memory acceptance");
             end
 
             @(negedge clk);
-            snoop_rsp_valid        = expected_snoop_mask;
-            snoop_rsp_present      = peer_present
-                                   ? expected_snoop_mask : 2'b00;
-            snoop_rsp_dirty        = peer_dirty
-                                   ? expected_snoop_mask : 2'b00;
-            snoop_rsp_data_valid   = peer_dirty
-                                   ? expected_snoop_mask : 2'b00;
-            snoop_rsp_data_0       =
-                128'hd100_d101_d102_d103_d104_d105_d106_d107;
-            snoop_rsp_data_1       =
-                128'he100_e101_e102_e103_e104_e105_e106_e107;
-
-            check_condition(!memory_req_valid,
-                            "downstream request was active before snoop response");
+            memory_req_ready = 1'b1;
 
             @(posedge clk);
             #1;
             check_owner(expected_owner);
+            check_condition(!memory_req_valid,
+                            "memory request remained valid after acceptance");
 
-            if (peer_dirty) begin
-                check_condition(memory_req_valid == 1'b0,
-                                "dirty-peer transaction incorrectly accessed memory");
-                check_condition(l1_rsp_valid == expected_response_mask,
-                                "dirty-peer error was not routed only to the owner");
-                check_condition(l1_rsp_shared == expected_shared_mask,
-                                "dirty-peer shared indication was incorrect");
-                check_condition(l1_rsp_error == expected_error_mask,
-                                "dirty-peer condition did not produce an error");
+            @(negedge clk);
+            memory_req_ready = 1'b0;
 
-                if (expected_owner == 0) begin
-                    check_condition(
-                        l1_rsp_data_0 == {MC_LINE_WIDTH{1'b0}},
-                        "dirty-peer error returned unsafe requester data"
-                    );
-                    check_condition(l1_rsp_data_1 == {MC_LINE_WIDTH{1'b0}},
-                                    "nonowner received dirty-peer data");
-                end else begin
-                    check_condition(
-                        l1_rsp_data_1 == {MC_LINE_WIDTH{1'b0}},
-                        "dirty-peer error returned unsafe requester data"
-                    );
-                    check_condition(l1_rsp_data_0 == {MC_LINE_WIDTH{1'b0}},
-                                    "nonowner received dirty-peer data");
-                end
-
-                @(negedge clk);
-                snoop_rsp_valid      = 2'b00;
-                snoop_rsp_present    = 2'b00;
-                snoop_rsp_dirty      = 2'b00;
-                snoop_rsp_data_valid = 2'b00;
-
-                @(posedge clk);
-                #1;
-            end else begin
-                check_condition(snoop_valid == 2'b00,
-                                "snoop remained active after acknowledgement");
-                check_condition(memory_req_valid,
-                                "downstream request did not follow snoop completion");
-                check_condition(memory_req_op == expected_memory_op,
-                                "downstream operation type was incorrect");
-                check_condition(memory_req_line_addr == expected_line_address,
-                                "downstream line address was incorrect");
-                check_condition(memory_req_wdata == expected_write_data,
-                                "downstream write data was incorrect");
-                check_condition(l1_rsp_valid == 2'b00,
-                                "owner response appeared before memory completion");
-
-                held_memory_address    = memory_req_line_addr;
-                held_memory_write_data = memory_req_wdata;
-
-                @(negedge clk);
-                snoop_rsp_valid      = 2'b00;
-                snoop_rsp_present    = 2'b00;
-                snoop_rsp_dirty      = 2'b00;
-                snoop_rsp_data_valid = 2'b00;
-
-                for (delay_index = 0;
-                     delay_index < memory_accept_delay;
-                     delay_index = delay_index + 1) begin
-                    @(posedge clk);
-                    #1;
-                    check_owner(expected_owner);
-                    check_condition(memory_req_valid,
-                                    "memory request_valid dropped before acceptance");
-                    check_condition(memory_req_op == expected_memory_op,
-                                    "memory operation changed before acceptance");
-                    check_condition(
-                        memory_req_line_addr == held_memory_address,
-                        "memory address changed before acceptance"
-                    );
-                    check_condition(
-                        memory_req_wdata == held_memory_write_data,
-                        "memory write data changed before acceptance"
-                    );
-                    check_condition(l1_rsp_valid == 2'b00,
-                                    "response appeared before memory acceptance");
-                end
-
-                @(negedge clk);
-                memory_req_ready = 1'b1;
-
+            for (delay_index = 0;
+                 delay_index < memory_response_delay;
+                 delay_index = delay_index + 1) begin
                 @(posedge clk);
                 #1;
                 check_owner(expected_owner);
                 check_condition(!memory_req_valid,
-                                "memory request remained valid after acceptance");
-
-                @(negedge clk);
-                memory_req_ready = 1'b0;
-
-                for (delay_index = 0;
-                     delay_index < memory_response_delay;
-                     delay_index = delay_index + 1) begin
-                    @(posedge clk);
-                    #1;
-                    check_owner(expected_owner);
-                    check_condition(!memory_req_valid,
-                                    "memory request was reissued while awaiting response");
-                    check_condition(l1_rsp_valid == 2'b00,
-                                    "owner response appeared before memory completion");
-                end
-
-                @(negedge clk);
-                memory_rsp_rdata = expected_memory_data;
-                memory_rsp_error = expected_memory_error;
-                memory_rsp_valid = 1'b1;
-
-                @(posedge clk);
-                #1;
-                check_owner(expected_owner);
-                check_condition(l1_rsp_valid == expected_response_mask,
-                                "final response was not routed only to the owner");
-                check_condition(l1_rsp_shared == expected_shared_mask,
-                                "final shared-line indication was incorrect");
-                check_condition(l1_rsp_error == expected_error_mask,
-                                "final response error indication was incorrect");
-
-                if (expected_owner == 0) begin
-                    check_condition(l1_rsp_data_0 == expected_memory_data,
-                                    "memory data did not reach requester 0");
-                    check_condition(l1_rsp_data_1 == {MC_LINE_WIDTH{1'b0}},
-                                    "memory data was exposed to nonowner 1");
-                end else begin
-                    check_condition(l1_rsp_data_1 == expected_memory_data,
-                                    "memory data did not reach requester 1");
-                    check_condition(l1_rsp_data_0 == {MC_LINE_WIDTH{1'b0}},
-                                    "memory data was exposed to nonowner 0");
-                end
-
-                @(negedge clk);
-                memory_rsp_valid = 1'b0;
-                memory_rsp_error = 1'b0;
-
-                @(posedge clk);
-                #1;
+                                "memory request was reissued while awaiting response");
+                check_condition(l1_rsp_valid == 2'b00,
+                                "owner response appeared before memory completion");
             end
 
+            @(negedge clk);
+            memory_rsp_rdata = expected_memory_data;
+            memory_rsp_error = expected_memory_error;
+            memory_rsp_valid = 1'b1;
+
+            @(posedge clk);
+            #1;
+            check_owner(expected_owner);
+            check_condition(l1_rsp_valid == expected_response_mask,
+                            "final response was not routed only to the owner");
+            check_condition(l1_rsp_shared == expected_shared_mask,
+                            "final shared-line indication was incorrect");
+            check_condition(l1_rsp_error == expected_error_mask,
+                            "final response error indication was incorrect");
+
+            if (expected_owner == 0) begin
+                check_condition(l1_rsp_data_0 == expected_response_data,
+                                "response data did not reach requester 0");
+                check_condition(l1_rsp_data_1 == {MC_LINE_WIDTH{1'b0}},
+                                "response data was exposed to nonowner 1");
+            end else begin
+                check_condition(l1_rsp_data_1 == expected_response_data,
+                                "response data did not reach requester 1");
+                check_condition(l1_rsp_data_0 == {MC_LINE_WIDTH{1'b0}},
+                                "response data was exposed to nonowner 0");
+            end
+
+            @(negedge clk);
+            memory_rsp_valid = 1'b0;
+            memory_rsp_error = 1'b0;
+
+            @(posedge clk);
+            #1;
             check_condition(l1_rsp_valid == 2'b00,
                             "final response lasted more than one cycle");
-            check_condition(
-                memory_accept_count ==
-                    memory_accept_before + (peer_dirty ? 0 : 1),
-                "downstream request acceptance count was incorrect"
-            );
+            check_condition(memory_accept_count == memory_accept_before + 1,
+                            "downstream request acceptance count was incorrect");
 
             if (expected_owner == 0) begin
                 check_condition(response_count_0 == response_0_before + 1,
@@ -566,7 +567,7 @@ module tb_shared_bus;
             1'b0
         );
 
-        // Dirty peer data is unsupported and must return an explicit error.
+        // Dirty peer data is flushed to memory and forwarded to the requester.
         @(negedge clk);
         configure_request(
             1,
@@ -629,7 +630,7 @@ module tb_shared_bus;
                         "arbiter retained ownership after all requests completed");
         check_condition(l1_rsp_valid == 2'b00,
                         "bus generated a duplicate final response");
-        check_condition(memory_accept_count == 6,
+        check_condition(memory_accept_count == 7,
                         "unexpected total downstream acceptance count");
         check_condition(response_count_0 == 4,
                         "requester 0 response count was incorrect");

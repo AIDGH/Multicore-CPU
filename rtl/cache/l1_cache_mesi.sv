@@ -184,7 +184,7 @@ module l1_cache_mesi #(
                             fsm_state     <= C_WRITEBACK;
                         end else begin
                             bus_req      <= 1'b1;
-                            bus_req_txn  <= needs_exclusive ? MC_BUS_RDX : MC_BUS_RD;
+                            bus_req_txn  <= mc_bus_txn_t'(needs_exclusive ? MC_BUS_RDX : MC_BUS_RD);
                             bus_req_addr <= req_addr_reg;
                             fsm_state    <= C_BUS_REQ;
                         end
@@ -194,7 +194,7 @@ module l1_cache_mesi #(
                 C_WRITEBACK: begin
                     if (bus_gnt) begin
                         bus_req       <= 1'b1;
-                        bus_req_txn   <= needs_exclusive ? MC_BUS_RDX : MC_BUS_RD;
+                        bus_req_txn   <= mc_bus_txn_t'(needs_exclusive ? MC_BUS_RDX : MC_BUS_RD);
                         bus_req_addr  <= req_addr_reg;
                         fsm_state     <= C_BUS_REQ;
                     end

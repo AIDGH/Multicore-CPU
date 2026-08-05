@@ -43,11 +43,11 @@ module shared_bus (
     timeprecision 1ps;
 
     localparam logic [2:0]
-        BUS_IDLE          = 3'd0,
-        BUS_SNOOP         = 3'd1,
-        BUS_MEMORY_REQ    = 3'd2,
-        BUS_MEMORY_WAIT   = 3'd3,
-        BUS_RESPOND       = 3'd4;
+        BUS_IDLE        = 3'd0,
+        BUS_SNOOP       = 3'd1,
+        BUS_MEMORY_REQ  = 3'd2,
+        BUS_MEMORY_WAIT = 3'd3,
+        BUS_RESPOND     = 3'd4;
 
     logic [2:0]                   state;
     logic                         owner_id;
@@ -57,9 +57,8 @@ module shared_bus (
     logic [MC_LINE_WIDTH-1:0]     final_rsp_data;
     logic                         final_rsp_shared;
     logic                         final_rsp_error;
-    
-    // FIX: Flag for Cache-to-Cache Intervention
-    logic                         peer_dirty_flush; 
+    logic                         peer_dirty_flush;
+    logic                         peer_dirty_pending;
 
     logic [1:0] arb_grant;
     logic       arb_txn_done;
@@ -70,6 +69,10 @@ module shared_bus (
         owner_id ? snoop_rsp_present[0] : snoop_rsp_present[1];
     wire peer_rsp_dirty =
         owner_id ? snoop_rsp_dirty[0] : snoop_rsp_dirty[1];
+    wire peer_rsp_data_valid =
+        owner_id ? snoop_rsp_data_valid[0] : snoop_rsp_data_valid[1];
+    wire [MC_LINE_WIDTH-1:0] peer_rsp_data =
+        owner_id ? snoop_rsp_data_0 : snoop_rsp_data_1;
 
     rr_arbiter arbiter (
         .clk(clk),
@@ -92,12 +95,11 @@ module shared_bus (
         snoop_line_addr    = active_line_addr;
         snoop_requester_id = owner_id;
 
-        memory_req_valid     = 1'b0;
-        
-        // FIX: If it's a writeback OR a dirty cache-to-cache intervention, write to memory
-        memory_req_op        = mc_line_mem_op_t'(
-            (active_txn == MC_BUS_WRITEBACK || peer_dirty_flush)
-            ? MC_LINE_WRITE : MC_LINE_READ
+        memory_req_valid = 1'b0;
+        memory_req_op = mc_line_mem_op_t'(
+            ((active_txn == MC_BUS_WRITEBACK) || peer_dirty_flush)
+                ? MC_LINE_WRITE
+                : MC_LINE_READ
         );
         memory_req_line_addr = active_line_addr;
         memory_req_wdata     = active_wdata;
@@ -134,19 +136,22 @@ module shared_bus (
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
-            state            <= BUS_IDLE;
-            owner_id         <= 1'b0;
-            active_txn       <= MC_BUS_RD;
-            active_line_addr <= {MC_ADDR_WIDTH{1'b0}};
-            active_wdata     <= {MC_LINE_WIDTH{1'b0}};
-            final_rsp_data   <= {MC_LINE_WIDTH{1'b0}};
-            final_rsp_shared <= 1'b0;
-            final_rsp_error  <= 1'b0;
-            peer_dirty_flush <= 1'b0; // FIX
+            state               <= BUS_IDLE;
+            owner_id            <= 1'b0;
+            active_txn          <= MC_BUS_RD;
+            active_line_addr    <= {MC_ADDR_WIDTH{1'b0}};
+            active_wdata        <= {MC_LINE_WIDTH{1'b0}};
+            final_rsp_data      <= {MC_LINE_WIDTH{1'b0}};
+            final_rsp_shared    <= 1'b0;
+            final_rsp_error     <= 1'b0;
+            peer_dirty_flush    <= 1'b0;
+            peer_dirty_pending  <= 1'b0;
         end else begin
             case (state)
                 BUS_IDLE: begin
-                    peer_dirty_flush <= 1'b0; // Reset flag
+                    peer_dirty_flush   <= 1'b0;
+                    peer_dirty_pending <= 1'b0;
+
                     if (arb_grant[0]) begin
                         owner_id         <= 1'b0;
                         active_txn       <= l1_req_txn_0;
@@ -160,10 +165,11 @@ module shared_bus (
                         final_rsp_data   <= {MC_LINE_WIDTH{1'b0}};
                         final_rsp_shared <= 1'b0;
                         final_rsp_error  <= 1'b0;
-                        
-                        if (l1_req_txn_0 == MC_BUS_WRITEBACK) state <= BUS_MEMORY_REQ;
-                        else state <= BUS_SNOOP;
-                        
+
+                        if (l1_req_txn_0 == MC_BUS_WRITEBACK)
+                            state <= BUS_MEMORY_REQ;
+                        else
+                            state <= BUS_SNOOP;
                     end else if (arb_grant[1]) begin
                         owner_id         <= 1'b1;
                         active_txn       <= l1_req_txn_1;
@@ -177,23 +183,38 @@ module shared_bus (
                         final_rsp_data   <= {MC_LINE_WIDTH{1'b0}};
                         final_rsp_shared <= 1'b0;
                         final_rsp_error  <= 1'b0;
-                        
-                        if (l1_req_txn_1 == MC_BUS_WRITEBACK) state <= BUS_MEMORY_REQ;
-                        else state <= BUS_SNOOP;
+
+                        if (l1_req_txn_1 == MC_BUS_WRITEBACK)
+                            state <= BUS_MEMORY_REQ;
+                        else
+                            state <= BUS_SNOOP;
                     end
                 end
 
                 BUS_SNOOP: begin
-                    if (peer_rsp_valid) begin
+                    if (peer_dirty_pending) begin
+                        if (peer_rsp_data_valid) begin
+                            active_wdata       <= peer_rsp_data;
+                            final_rsp_data     <= peer_rsp_data;
+                            peer_dirty_flush   <= 1'b1;
+                            peer_dirty_pending <= 1'b0;
+                            state              <= BUS_MEMORY_REQ;
+                        end
+                    end else if (peer_rsp_valid) begin
                         final_rsp_shared <= peer_rsp_present;
 
-                        // FIX: Cache-to-Cache Intervention
                         if (peer_rsp_dirty) begin
-                            peer_dirty_flush <= 1'b1;
-                            active_wdata     <= owner_id ? snoop_rsp_data_0 : snoop_rsp_data_1;
-                            final_rsp_data   <= owner_id ? snoop_rsp_data_0 : snoop_rsp_data_1;
+                            if (peer_rsp_data_valid) begin
+                                active_wdata     <= peer_rsp_data;
+                                final_rsp_data   <= peer_rsp_data;
+                                peer_dirty_flush <= 1'b1;
+                                state            <= BUS_MEMORY_REQ;
+                            end else begin
+                                peer_dirty_pending <= 1'b1;
+                            end
+                        end else begin
+                            state <= BUS_MEMORY_REQ;
                         end
-                        state <= BUS_MEMORY_REQ;
                     end
                 end
 
@@ -204,26 +225,24 @@ module shared_bus (
 
                 BUS_MEMORY_WAIT: begin
                     if (memory_rsp_valid) begin
-                        // FIX: Only take memory data if we didn't get it from peer
-                        if (!peer_dirty_flush && active_txn != MC_BUS_WRITEBACK) begin
+                        if (!peer_dirty_flush &&
+                            (active_txn != MC_BUS_WRITEBACK)) begin
                             final_rsp_data <= memory_rsp_rdata;
                         end
+
                         final_rsp_error <= memory_rsp_error;
                         state           <= BUS_RESPOND;
                     end
                 end
 
-                BUS_RESPOND: state <= BUS_IDLE;
+                BUS_RESPOND: begin
+                    state <= BUS_IDLE;
+                end
 
-                default: state <= BUS_IDLE;
+                default: begin
+                    state <= BUS_IDLE;
+                end
             endcase
         end
     end
-
-    wire _unused_snoop_data = &{
-        1'b0,
-        snoop_rsp_data_valid,
-        snoop_rsp_data_0[0],
-        snoop_rsp_data_1[0]
-    };
 endmodule

@@ -229,25 +229,27 @@ module tb_multicore_interconnect_top;
         integer response_1_before;
         integer memory_accept_cycle;
         integer owner_response_cycle;
+        logic requires_snoop;
         logic [1:0] expected_owner_mask;
         logic [1:0] expected_snoop_mask;
         logic [1:0] expected_shared_mask;
         logic [1:0] expected_error_mask;
         mc_line_mem_op_t expected_memory_op;
         begin
+            requires_snoop = (expected_txn != MC_BUS_WRITEBACK);
             expected_owner_mask =
                 (expected_owner == 0) ? 2'b01 : 2'b10;
             expected_snoop_mask =
                 (expected_owner == 0) ? 2'b10 : 2'b01;
             expected_shared_mask =
-                peer_present ? expected_owner_mask : 2'b00;
+                (requires_snoop && peer_present)
+                ? expected_owner_mask : 2'b00;
             expected_error_mask =
                 expected_response_error ? expected_owner_mask : 2'b00;
-
-            if (expected_txn == MC_BUS_WRITEBACK)
-                expected_memory_op = MC_LINE_WRITE;
-            else
-                expected_memory_op = MC_LINE_READ;
+            expected_memory_op = mc_line_mem_op_t'(
+                (expected_txn == MC_BUS_WRITEBACK)
+                ? MC_LINE_WRITE : MC_LINE_READ
+            );
 
             memory_accept_before = memory_accept_count;
             response_0_before    = response_count_0;
@@ -267,58 +269,74 @@ module tb_multicore_interconnect_top;
             @(posedge clk);
             #1;
             check_owner(expected_owner);
-            check_condition(snoop_valid_view == expected_snoop_mask,
-                            "top-level snoop was not routed only to the nonowner");
-
-            if (expected_owner == 0) begin
-                check_condition(cache1_snoop_txn == expected_txn,
-                                "cache 1 snoop transaction was incorrect");
-                check_condition(
-                    cache1_snoop_line_addr == expected_line_address,
-                    "cache 1 snoop line address was incorrect"
-                );
-                check_condition(!cache1_snoop_requester_id,
-                                "cache 1 snoop requester ID was incorrect");
-            end else begin
-                check_condition(cache0_snoop_txn == expected_txn,
-                                "cache 0 snoop transaction was incorrect");
-                check_condition(
-                    cache0_snoop_line_addr == expected_line_address,
-                    "cache 0 snoop line address was incorrect"
-                );
-                check_condition(cache0_snoop_requester_id,
-                                "cache 0 snoop requester ID was incorrect");
-            end
-
-            check_condition(!dut.memory_req_valid,
-                            "top-level memory request preceded snoop completion");
             check_condition(response_valid_view == 2'b00,
                             "top-level response appeared before completion");
+
+            if (requires_snoop) begin
+                check_condition(snoop_valid_view == expected_snoop_mask,
+                                "top-level snoop was not routed only to the nonowner");
+
+                if (expected_owner == 0) begin
+                    check_condition(cache1_snoop_txn == expected_txn,
+                                    "cache 1 snoop transaction was incorrect");
+                    check_condition(
+                        cache1_snoop_line_addr == expected_line_address,
+                        "cache 1 snoop line address was incorrect"
+                    );
+                    check_condition(!cache1_snoop_requester_id,
+                                    "cache 1 snoop requester ID was incorrect");
+                end else begin
+                    check_condition(cache0_snoop_txn == expected_txn,
+                                    "cache 0 snoop transaction was incorrect");
+                    check_condition(
+                        cache0_snoop_line_addr == expected_line_address,
+                        "cache 0 snoop line address was incorrect"
+                    );
+                    check_condition(cache0_snoop_requester_id,
+                                    "cache 0 snoop requester ID was incorrect");
+                end
+
+                check_condition(!dut.memory_req_valid,
+                                "top-level memory request preceded snoop completion");
+            end else begin
+                check_condition(snoop_valid_view == 2'b00,
+                                "write-back incorrectly snooped a cache endpoint");
+                check_condition(dut.memory_req_valid,
+                                "write-back did not issue an internal memory request");
+            end
 
             @(negedge clk);
             drive_request_mask(requests_after_capture);
 
-            for (delay_index = 0; delay_index < 2;
-                 delay_index = delay_index + 1) begin
+            if (requires_snoop) begin
+                for (delay_index = 0; delay_index < 2;
+                     delay_index = delay_index + 1) begin
+                    @(posedge clk);
+                    #1;
+                    check_owner(expected_owner);
+                    check_condition(snoop_valid_view == expected_snoop_mask,
+                                    "snoop changed before delayed acknowledgement");
+                    check_condition(!dut.memory_req_valid,
+                                    "memory request preceded delayed snoop acknowledgement");
+                    check_condition(response_valid_view == 2'b00,
+                                    "owner response preceded memory completion");
+                end
+
+                @(negedge clk);
+                drive_clean_snoop_response(expected_owner, peer_present);
+
                 @(posedge clk);
                 #1;
                 check_owner(expected_owner);
-                check_condition(snoop_valid_view == expected_snoop_mask,
-                                "snoop changed before delayed acknowledgement");
-                check_condition(!dut.memory_req_valid,
-                                "memory request preceded delayed snoop acknowledgement");
-                check_condition(response_valid_view == 2'b00,
-                                "owner response preceded memory completion");
+                check_condition(dut.memory_req_valid,
+                                "top-level did not issue internal memory request");
+
+                @(negedge clk);
+                clear_snoop_responses();
             end
 
-            @(negedge clk);
-            drive_clean_snoop_response(expected_owner, peer_present);
-
-            @(posedge clk);
-            #1;
-            check_owner(expected_owner);
             check_condition(dut.memory_req_valid,
-                            "top-level did not issue internal memory request");
+                            "internal memory request was not asserted");
             check_condition(dut.memory_req_op == expected_memory_op,
                             "internal memory operation was incorrect");
             check_condition(
@@ -327,9 +345,6 @@ module tb_multicore_interconnect_top;
             );
             check_condition(dut.memory_req_wdata == expected_write_data,
                             "internal memory write data was incorrect");
-
-            @(negedge clk);
-            clear_snoop_responses();
 
             while (!(dut.memory_req_valid && dut.memory_req_ready)) begin
                 @(negedge clk);
@@ -412,9 +427,7 @@ module tb_multicore_interconnect_top;
         integer memory_accept_before;
         integer response_0_before;
         integer response_1_before;
-        logic [1:0] expected_snoop_mask;
         begin
-            expected_snoop_mask = (owner == 0) ? 2'b10 : 2'b01;
             memory_accept_before = memory_accept_count;
             response_0_before    = response_count_0;
             response_1_before    = response_count_1;
@@ -425,26 +438,8 @@ module tb_multicore_interconnect_top;
             @(posedge clk);
             #1;
             check_owner(owner);
-            check_condition(snoop_valid_view == expected_snoop_mask,
-                            "cancelled write snoop routing was incorrect");
-
-            @(negedge clk);
-            drive_request_mask(2'b00);
-
-            repeat (2) begin
-                @(posedge clk);
-                #1;
-                check_owner(owner);
-                check_condition(!dut.memory_req_valid,
-                                "cancelled write reached memory before snoop ack");
-            end
-
-            @(negedge clk);
-            drive_clean_snoop_response(owner, 1'b0);
-
-            @(posedge clk);
-            #1;
-            check_owner(owner);
+            check_condition(snoop_valid_view == 2'b00,
+                            "cancelled write-back incorrectly snooped a peer");
             check_condition(dut.memory_req_valid,
                             "cancelled write did not reach internal memory");
             check_condition(dut.memory_req_op == MC_LINE_WRITE,
@@ -455,7 +450,7 @@ module tb_multicore_interconnect_top;
                             "cancelled write data was captured incorrectly");
 
             @(negedge clk);
-            clear_snoop_responses();
+            drive_request_mask(2'b00);
 
             while (!(dut.memory_req_valid && dut.memory_req_ready))
                 @(negedge clk);

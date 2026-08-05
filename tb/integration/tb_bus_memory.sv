@@ -172,25 +172,27 @@ module tb_bus_memory;
         integer response_1_before;
         integer memory_accept_cycle;
         integer owner_response_cycle;
+        logic requires_snoop;
         logic [1:0] expected_owner_mask;
         logic [1:0] expected_snoop_mask;
         logic [1:0] expected_shared_mask;
         logic [1:0] expected_error_mask;
         mc_line_mem_op_t expected_memory_op;
         begin
+            requires_snoop = (expected_txn != MC_BUS_WRITEBACK);
             expected_owner_mask =
                 (expected_owner == 0) ? 2'b01 : 2'b10;
             expected_snoop_mask =
                 (expected_owner == 0) ? 2'b10 : 2'b01;
             expected_shared_mask =
-                peer_present ? expected_owner_mask : 2'b00;
+                (requires_snoop && peer_present)
+                ? expected_owner_mask : 2'b00;
             expected_error_mask =
                 expected_response_error ? expected_owner_mask : 2'b00;
-
-            if (expected_txn == MC_BUS_WRITEBACK)
-                expected_memory_op = MC_LINE_WRITE;
-            else
-                expected_memory_op = MC_LINE_READ;
+            expected_memory_op = mc_line_mem_op_t'(
+                (expected_txn == MC_BUS_WRITEBACK)
+                ? MC_LINE_WRITE : MC_LINE_READ
+            );
 
             memory_accept_before = memory_accept_count;
             response_0_before    = response_count_0;
@@ -210,57 +212,72 @@ module tb_bus_memory;
             @(posedge clk);
             #1;
             check_owner(expected_owner);
-            check_condition(snoop_valid == expected_snoop_mask,
-                            "clean snoop was not routed only to the nonowner");
-            check_condition(snoop_txn == expected_txn,
-                            "snoop transaction did not match the captured request");
-            check_condition(snoop_line_addr == expected_line_address,
-                            "snoop line address did not match the captured request");
-            check_condition(
-                snoop_requester_id == (expected_owner == 1),
-                "snoop requester identity did not match the owner"
-            );
-            check_condition(!memory_req_valid,
-                            "bus accessed memory before snoop acknowledgement");
+
+            if (requires_snoop) begin
+                check_condition(snoop_valid == expected_snoop_mask,
+                                "clean snoop was not routed only to the nonowner");
+                check_condition(snoop_txn == expected_txn,
+                                "snoop transaction did not match the captured request");
+                check_condition(snoop_line_addr == expected_line_address,
+                                "snoop line address did not match the captured request");
+                check_condition(
+                    snoop_requester_id == (expected_owner == 1),
+                    "snoop requester identity did not match the owner"
+                );
+                check_condition(!memory_req_valid,
+                                "bus accessed memory before snoop acknowledgement");
+            end else begin
+                check_condition(snoop_valid == 2'b00,
+                                "write-back incorrectly snooped the peer");
+                check_condition(memory_req_valid,
+                                "write-back did not issue a direct memory request");
+            end
 
             @(negedge clk);
             l1_req_valid = requests_after_capture;
 
-            for (delay_index = 0; delay_index < 2;
-                 delay_index = delay_index + 1) begin
+            if (requires_snoop) begin
+                for (delay_index = 0; delay_index < 2;
+                     delay_index = delay_index + 1) begin
+                    @(posedge clk);
+                    #1;
+                    check_owner(expected_owner);
+                    check_condition(snoop_valid == expected_snoop_mask,
+                                    "snoop changed before clean acknowledgement");
+                    check_condition(!memory_req_valid,
+                                    "memory request preceded clean snoop acknowledgement");
+                    check_condition(l1_rsp_valid == 2'b00,
+                                    "owner response preceded memory completion");
+                end
+
+                @(negedge clk);
+                snoop_rsp_valid      = expected_snoop_mask;
+                snoop_rsp_present    =
+                    peer_present ? expected_snoop_mask : 2'b00;
+                snoop_rsp_dirty      = 2'b00;
+                snoop_rsp_data_valid = 2'b00;
+
                 @(posedge clk);
                 #1;
                 check_owner(expected_owner);
-                check_condition(snoop_valid == expected_snoop_mask,
-                                "snoop changed before clean acknowledgement");
-                check_condition(!memory_req_valid,
-                                "memory request preceded clean snoop acknowledgement");
-                check_condition(l1_rsp_valid == 2'b00,
-                                "owner response preceded memory completion");
+                check_condition(memory_req_valid,
+                                "bus did not issue memory request after clean snoop");
+
+                @(negedge clk);
+                snoop_rsp_valid      = 2'b00;
+                snoop_rsp_present    = 2'b00;
+                snoop_rsp_dirty      = 2'b00;
+                snoop_rsp_data_valid = 2'b00;
             end
 
-            @(negedge clk);
-            snoop_rsp_valid      = expected_snoop_mask;
-            snoop_rsp_present    =
-                peer_present ? expected_snoop_mask : 2'b00;
-            snoop_rsp_dirty      = 2'b00;
-            snoop_rsp_data_valid = 2'b00;
-
-            @(posedge clk);
-            #1;
-            check_owner(expected_owner);
             check_condition(memory_req_valid,
-                            "bus did not issue memory request after clean snoop");
+                            "bus-to-memory request was not asserted");
             check_condition(memory_req_op == expected_memory_op,
                             "bus-to-memory operation was incorrect");
             check_condition(memory_req_line_addr == expected_line_address,
                             "bus-to-memory line address was incorrect");
             check_condition(memory_req_wdata == expected_write_data,
                             "bus-to-memory write line was incorrect");
-
-            @(negedge clk);
-            snoop_rsp_valid   = 2'b00;
-            snoop_rsp_present = 2'b00;
 
             while (!(memory_req_valid && memory_req_ready)) begin
                 @(negedge clk);

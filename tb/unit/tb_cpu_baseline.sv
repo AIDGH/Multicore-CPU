@@ -190,6 +190,8 @@ module tb_cpu_baseline;
     cpu_core dut (
         .Clk(clk),
         .Rst(rst),
+        .core_id(1'b0),
+        .cancel_reservation(1'b0),
         .InstrIn(m_instr_in),
         .InstrAddr(m_instr_addr),
         .data_req_valid(m_data_req_valid),
