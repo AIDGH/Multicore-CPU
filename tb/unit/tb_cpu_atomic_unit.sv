@@ -78,12 +78,7 @@ module tb_cpu_atomic_unit;
 
     assign instr_in = instructions[instr_addr[3:0]];
 
-    always @* begin
-        if (data_req_write)
-            l1_request_op = MC_MEM_STORE;
-        else
-            l1_request_op = MC_MEM_LOAD;
-    end
+    assign l1_request_op = mc_mem_op_t'(data_req_op);
 
     assign data_rsp_error = data_rsp_valid &&
                             (l1_response_status != MC_RESP_OK) &&

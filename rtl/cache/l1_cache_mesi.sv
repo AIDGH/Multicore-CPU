@@ -218,13 +218,26 @@ module l1_cache_mesi #(
                             safe_rsp_data = (^bus_rsp_rdata === 1'bx) ? 128'd0 : bus_rsp_rdata;
 
                             if (is_read) begin
-                                data_array[req_index]  <= safe_rsp_data;
-                                // FIX: Use correct bus_rsp_shared signal
-                                if (bus_rsp_shared) state_array[req_index] <= STATE_S;
-                                else                state_array[req_index] <= STATE_E;
+                                data_array[req_index] <= safe_rsp_data;
+                                if (bus_rsp_shared)
+                                    state_array[req_index] <= STATE_S;
+                                else
+                                    state_array[req_index] <= STATE_E;
                                 data_rsp_rdata <= get_word(safe_rsp_data, req_word);
+                            end else if (is_amo) begin
+                                data_rsp_rdata <= get_word(safe_rsp_data, req_word);
+                                data_array[req_index] <= replace_word(
+                                    safe_rsp_data,
+                                    req_word,
+                                    get_word(safe_rsp_data, req_word) + req_wdata_reg
+                                );
+                                state_array[req_index] <= STATE_M;
                             end else begin
-                                data_array[req_index] <= replace_word(safe_rsp_data, req_word, req_wdata_reg);
+                                data_array[req_index] <= replace_word(
+                                    safe_rsp_data,
+                                    req_word,
+                                    req_wdata_reg
+                                );
                                 state_array[req_index] <= STATE_M;
                             end
 

@@ -97,6 +97,25 @@ run_cpu_atomic_unit() {
     vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
 }
 
+
+run_l1_cache_mesi() {
+    local test_name="l1_cache_mesi"
+    local build_dir="${repo_root}/build/${test_name}"
+    local simulation="${build_dir}/tb_l1_cache_mesi.vvp"
+
+    mkdir -p "${build_dir}"
+
+    iverilog -g2012 -Wall \
+        -s tb_l1_cache_mesi \
+        -o "${simulation}" \
+        "${repo_root}/rtl/common/mc_defs.svh" \
+        "${repo_root}/rtl/cache/l1_cache_mesi.sv" \
+        "${repo_root}/tb/unit/tb_l1_cache_mesi.sv" \
+        2>&1 | tee "${build_dir}/compile.log"
+
+    vvp "${simulation}" 2>&1 | tee "${build_dir}/run.log"
+}
+
 run_rr_arbiter() {
     local test_name="rr_arbiter"
     local build_dir="${repo_root}/build/${test_name}"
@@ -222,7 +241,7 @@ run_dual_core_top() {
 }
 
 usage() {
-    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|cpu_atomic_unit|rr_arbiter|shared_bus|shared_memory|bus_memory|multicore_interconnect_top|dual_core_top|all}" >&2
+    echo "Usage: $0 {cpu_baseline|interfaces|cpu_memory_handshake|cpu_atomic_unit|l1_cache_mesi|rr_arbiter|shared_bus|shared_memory|bus_memory|multicore_interconnect_top|dual_core_top|all}" >&2
 }
 
 case "${1:-}" in
@@ -237,6 +256,9 @@ case "${1:-}" in
         ;;
     cpu_atomic_unit)
         run_cpu_atomic_unit
+        ;;
+    l1_cache_mesi)
+        run_l1_cache_mesi
         ;;
     rr_arbiter)
         run_rr_arbiter
@@ -261,6 +283,7 @@ case "${1:-}" in
         run_interfaces
         run_cpu_memory_handshake
         run_cpu_atomic_unit
+        run_l1_cache_mesi
         run_rr_arbiter
         run_shared_bus
         run_shared_memory
